@@ -6,14 +6,12 @@
 Welcome to Panscola's documentation!
 ====================================
 
+Panscola is a collection of pandoc filters I created using `panflute <http://scorreia.com/software/panflute/>`_ while writing my thesis. In the end I ended up programming more then I wrote.
+Maybe some of these are useful for someone else. I created these docs just to try out actually documenting my code a bit.
+
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
-
-.. automodule:: panscola.utils
-    :members:
-    :undoc-members:
-    :show-inheritance:
 
 Indices and tables
 ==================

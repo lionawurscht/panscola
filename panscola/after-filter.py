@@ -1,13 +1,24 @@
 #!/usr/bin/env python
+if __name__ == "__main__" and __package__ is None:
+    from sys import path
+    from os.path import dirname as dir
+
+    path.append(dir(path[0]))
+
 import panflute as pf
 
-
-def prepare(doc):
-    doc.abbreviations = []
-    doc.bibliography = []
+from panscola import utils
 
 
+@utils.make_dependent()
 def fix_appendix(elem, doc):
+    """Looks for headings titled 'Bibliography' or 'Abbreviations',
+    adds a page break before them and puts them at the end of the
+    documents.
+
+    :param elem:
+    :param doc:
+    """
     if (
         isinstance(elem, pf.Header)
         and pf.stringify(elem) in ('Bibliography', 'Abbreviations')
@@ -62,7 +73,14 @@ def render_page_break_before(elem, doc):
             return []
 
 
-def finalize(doc):
+@utils.make_dependent()
+def _prepare(doc):
+    doc.abbreviations = []
+    doc.bibliography = []
+
+
+@utils.make_dependent()
+def _finalize(doc):
     doc.content.extend(doc.bibliography)
     doc.content.extend(doc.abbreviations)
 
@@ -70,7 +88,14 @@ def finalize(doc):
 
 
 def main(doc=None):
-    pf.run_filters([fix_appendix], prepare=prepare, finalize=finalize, doc=doc)
+    pf.run_filters(
+        utils.reduce_dependencies(
+            fix_appendix,
+        ),
+        finalize=_finalize.to_function(),
+        prepare=_prepare.to_function(),
+        doc=doc
+    )
 
 
 if __name__ == '__main__':

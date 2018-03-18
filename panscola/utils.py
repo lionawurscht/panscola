@@ -1,38 +1,86 @@
 #!/usr/bin/env python
 """Utility functions that are reused throughout the project."""
+import inspect
 import copy
 import io
 import string
-import logging
+import functools
 
 import bs4
 import panflute as pf
 
-logging.basicConfig(level=logging.WARN)
-
 
 class Dependent:
+    """A class to help manage dependencies within my filters.
+    Classes that inherit from it are automatically created using the
+    decorator :func:`make_dependent`.
+    """
+    object_ = None
+    dependencies = []
 
-    def __init__(self, object_, dependencies=None):
+    def __init__(self, object_=None, dependencies=None):
         if dependencies is not None:
-            self.dependencies = dependencies
+            self.dependencies = check_type_strictly(dependencies, list)
+
+        if object_ is not None:
+            self.object_ = object_
+
+    @classmethod
+    def resolve_dependencies(cls, resolved=None, seen=None):
+        """Calles the function :func:`resolve_dependencies` and returns
+        its return value.
+
+        :param resolved: list of :class:`Dependent` who's dependencies have
+                         alredy been resolved.
+        :type resolved: `list` | `None`
+        :param seen: list or :class:`Dependent` that already appeared while
+                     resolving its dependencies. Helps avoid circular
+                     dependencies.
+        :type seen: `list` | `None`
+        """
+        return resolve_dependencies(cls, resolved, seen)
+
+    @classmethod
+    def __repr__(cls):
+        if hasattr(cls.object_, '__name__'):
+            return cls.object_.__name__
         else:
-            self.dependencies = []
+            return repr(cls.object_)
 
-        self.object_ = object_
+    @classmethod
+    def add_dependency(cls, dependency):
+        cls.dependencies.append(dependency)
 
-    def __repr__(self):
-        return repr(self.object_)
-
-    def add_dependency(self, dependency):
-        self.dependencies.append(dependency)
-
-    def add_dependencies(self, *dependencies):
+    @classmethod
+    def add_dependencies(cls, *dependencies):
         for dependency in dependencies:
-            self.add_dependency(dependency)
+            cls.add_dependency(dependency)
+
+    @classmethod
+    def to_function(cls):
+        actions, _ = cls.resolve_dependencies()
+
+        def run_functions(*args):
+            for a in actions:
+                a.object_(*args)
+
+        return run_functions
 
 
 def resolve_dependencies(dependent, resolved=None, seen=None):
+    """Resolve all the dependencies of a Class or Instance of a Class that
+    inherited from :class:`Dependent`
+
+    :param resolved: list of :class:`Dependent` who's dependencies have
+                        alredy been resolved.
+    :type resolved: `list` | `None`
+    :param seen: list or :class:`Dependent` that already appeared while
+                    resolving its dependencies. Helps avoid circular
+                    dependencies.
+    :type seen: `list` | `None`
+    :returns: a `tuple` of containing the list of resolved and seen
+             :class:`Dependent` objects.
+    """
     if resolved is None:
         resolved = []
 
@@ -54,7 +102,79 @@ def resolve_dependencies(dependent, resolved=None, seen=None):
                     resolve_dependencies(dependency, resolved, seen)
             resolved.append(dependent)
 
-    return resolved
+    return resolved, seen
+
+
+def make_dependent(*dependencies):
+    """A decorator to make a function into a Class that inherits from
+    :class:`Dependent`.
+
+    :param *dependencies: What other functions this one is dependent on.
+    :type dependencies: :class:`Dependent` sequence
+
+    .. code-block:: python
+
+        @make_dependent()
+        def a_func(name):
+            print(name)
+
+        @make_dependent(a_func)
+        def b_func(name):
+            print(name)
+
+    Now `b_func` is dependent on `a_func`. A list of dependent functions can
+    then be created doing this:
+
+    .. code-block:: python
+
+        b_func.resolve_dependencies()
+    """
+    def function_wrapper(func):
+        inner_dependencies = dependencies
+
+        class Wrapped(Dependent):
+            object_ = func
+            dependencies = inner_dependencies
+
+        # Make the wrapped class have the original functions attributed
+        for attr in functools.WRAPPER_ASSIGNMENTS:
+            setattr(Wrapped, attr, getattr(func, attr))
+
+        setattr(Wrapped, '__signature__', inspect.signature(func))
+
+        return Wrapped
+
+    return function_wrapper
+
+
+def reduce_dependencies(*list_):
+    """Tries to resolve all the dependencies passed as parameters.
+
+    :param *list_: The dependencies that sould be resolved
+    :type *list: `tuple` of `Dependent`
+    :returns: A list of functions, hopefully in the order of their
+              depencency.
+    """
+    return [i.object_
+            for i in functools.reduce(
+                reduce_dependencies_helper,
+                [None] + list(list_),
+            )[0]]
+
+
+def reduce_dependencies_helper(returned_value, dependent):
+    """Just a helper function for :func:`reduce_dependencies`.
+
+    :param returned_value: The tuple returned by
+                           :func:`~panscola.Dependent.resolve_dependencies`
+    :type returned_value: `tuple` of two `list`
+    :param dependent:
+    """
+    if returned_value is None:
+        returned_value = ([], [])
+
+    return_value = dependent.resolve_dependencies(*returned_value)
+    return return_value
 
 
 def check_type(input, type_):
@@ -72,6 +192,16 @@ def check_type(input, type_):
             repr(input),
             type(input).__name__,
             type_.__name__
+        ))
+
+
+def check_type_strictly(input, type_):
+    if isinstance(input, type_):
+        return input
+    else:
+        raise TypeError('Expected input to be of type {}, was {}.'.format(
+            type_,
+            type(input),
         ))
 
 
@@ -147,7 +277,6 @@ def count_elements(elem, doc, relevant_elems, register=None, scope=None):
         index = 1 if not hasattr(elem, 'level') else elem.level
 
         if scope is not None:
-            logging.debug(f'Scope Name is "{scope_type_name}"')
             current_level = get_elem_count(
                 doc,
                 scope_type_name,
@@ -183,7 +312,6 @@ def get_elem_count(doc, types, level=1, register=None):
     elif isinstance(types, str):
         type_name = types
     elif isinstance(types, type):
-        logging.debug(f'Types is a type ({types}).')
         type_name = types.__name__
     else:
         raise TypeError('types should be either a touple of types a type or '
@@ -200,24 +328,18 @@ def get_elem_count(doc, types, level=1, register=None):
                 current_level = tuple(elem_counter[1:level+1])
                 scope = elem_counter[0]
             except IndexError:
-                logging.debug('IndexError?')
                 return (0,) * level
 
             if len(current_level) < level:
-                logging.debug(f'Current level: {current_level};'
-                              ' Scope: {scope}')
                 current_level = (current_level
                                  + (1,) * (level - len(current_level)))
 
             return scope + current_level
         except KeyError:
-            logging.debug(f"Didn't previously count that type ({type_name}).")
             count_elems[type_name] = [tuple(), 0]
             return (0,) * level
 
     except KeyError:
-        logging.debug(f'Register empty ({register}).')
-
         doc.count_elems[register] = {
             type_name: [tuple(), 0]
         }
@@ -337,10 +459,20 @@ def num_to_base_tuple(number, base):
     return collect
 
 
-def function_fron_dependencies(dependencies, *args):
-    def function(*args):
-        order = resolve_dependencies(dependencies)
-        for action in order:
-            action.object_(*args)
+def main():
 
-    return function
+    @make_dependent()
+    def popel(name):
+        """A simple function.
+
+        :param name:
+        """
+        print(name)
+
+    print(type(popel))
+    print(popel.to_function())
+    print(reduce_dependencies(popel))
+
+
+if __name__ == '__main__':
+    main()

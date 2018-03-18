@@ -1,8 +1,14 @@
 #!/usr/bin/env python
+if __name__ == "__main__" and __package__ is None:
+    from sys import path
+    from os.path import dirname as dir
+
+    path.append(dir(path[0]))
+
 import panflute as pf
 import bibtexparser
 
-import utils
+from panscola import utils
 
 false_strings = ('False', 'false')
 true_strings = ('True', 'true')
@@ -14,6 +20,7 @@ def bibtexparser_customizations(record):
     return record
 
 
+@utils.make_dependent()
 def process_headers(elem, doc):
     if isinstance(elem, pf.MetaMap):
         try:
@@ -41,34 +48,24 @@ def process_headers(elem, doc):
                 elem[key] = pf.MetaBool(True)
 
 
+@utils.make_dependent()
 def _prepare(doc):
     doc.bibliography = False
 
 
+@utils.make_dependent()
 def _finalize(doc):
     pass
 
 
-prepare_dependency = utils.Dependent(
-    _prepare
-)
-
-finalize_dependency = utils.Dependent(_finalize)
-
-process_headers_dependency = utils.Dependent(process_headers)
-
-
 def main(doc=None):
-    order = utils.resolve_dependencies([
-        process_headers_dependency,
-    ])
-    filters = [d.object_ for d in order]
-
     pf.run_filters(
-        filters,
-        finalize=utils.function_fron_dependencies([finalize_dependency]),
-        prepare=utils.function_fron_dependencies([prepare_dependency]),
-        doc=doc
+        utils.reduce_dependencies(
+            process_headers,
+        ),
+        finalize=_finalize.to_function(),
+        prepare=_prepare.to_function(),
+        doc=doc,
     )
 
 

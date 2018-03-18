@@ -1,4 +1,10 @@
 #!/usr/bin/env python
+if __name__ == "__main__" and __package__ is None:
+    from sys import path
+    from os.path import dirname as dir
+
+    path.append(dir(path[0]))
+
 import panflute as pf
 import re
 import math
@@ -7,10 +13,8 @@ import pylatex as pl
 from bs4 import BeautifulSoup
 from bs4.element import Tag, NavigableString
 
-from utils import (check_type, count_elements, get_elem_count, panflute2output,
-                   number_to_uppercase, create_nested_tags)
-import utils
-import latex_classes as lc
+from panscola import utils
+from panscola import latex_classes as lc
 
 # ---------------------------
 # Classes
@@ -28,9 +32,9 @@ class Table(pf.Table):
     ):
         super().__init__(*args, **kwargs)
 
-        self.col_cnt = check_type(col_cnt, int)
-        self.row_cnt = check_type(row_cnt, int)
-        self.total_width = check_type(total_width, float)
+        self.col_cnt = utils.check_type(col_cnt, int)
+        self.row_cnt = utils.check_type(row_cnt, int)
+        self.total_width = utils.check_type(total_width, float)
 
 
 class TableCell(pf.TableCell):
@@ -45,10 +49,11 @@ class TableCell(pf.TableCell):
     ):
         super().__init__(*args, **kwargs)
 
-        self.col_span = check_type(col_span, int)
-        self.row_span = check_type(row_span, int)
-        self.covered = check_type(covered, bool)
-        self.rm_horizontal_margins = check_type(rm_horizontal_margins, bool)
+        self.col_span = utils.check_type(col_span, int)
+        self.row_span = utils.check_type(row_span, int)
+        self.covered = utils.check_type(covered, bool)
+        self.rm_horizontal_margins = utils.check_type(rm_horizontal_margins,
+                                                      bool)
 
 
 class TableRow(pf.TableRow):
@@ -64,8 +69,8 @@ class TableRow(pf.TableRow):
         self.underlines = ([]
                            if underlines is None
                            else pf.utils.check_type(underlines, list))
-        self.top_space = check_type(top_space, bool)
-        self.btm_space = check_type(btm_space, bool)
+        self.top_space = utils.check_type(top_space, bool)
+        self.btm_space = utils.check_type(btm_space, bool)
 
 
 # ---------------------------
@@ -73,6 +78,7 @@ class TableRow(pf.TableRow):
 # ---------------------------
 
 
+@utils.make_dependent()
 def xml_code_to_table(elem, doc):
     if isinstance(elem, pf.CodeBlock) and 'panscola-table' in elem.classes:
         table_matrix = xml_to_table_matrix(elem.text)
@@ -95,7 +101,7 @@ def xml_to_table_matrix(xml_input):
     for row in table_soup.table.find_all('row'):
         row_attributes = row.attrs
         row_attributes['underlines'] = [
-            tuple(check_type(i, int) for i in u.strip().split('-'))
+            tuple(utils.check_type(i, int) for i in u.strip().split('-'))
             for u in row_attributes.get('underlines', '').split(',') if u
         ]
 
@@ -150,7 +156,7 @@ def table_matrix_to_pf(matrix, doc):
                 c_args = cell[0]
                 c_kwargs = cell[1]
 
-                col_span = check_type(c_kwargs.get('col_span', 1), int)
+                col_span = utils.check_type(c_kwargs.get('col_span', 1), int)
 
                 cells.append(TableCell(*list_to_elems(c_args), **c_kwargs))
 
@@ -196,8 +202,9 @@ def list_to_elems(list_):
             yield pf.Plain(pf.Str(str(i)))
 
 
+@utils.make_dependent()
 def render_table(elem, doc):
-    count_elements(
+    utils.count_elements(
         elem,
         doc,
         pf.Table,
@@ -221,7 +228,7 @@ def render_table(elem, doc):
 def render_table_footer_latex(elem, doc, tex):
     if isinstance(elem, pf.DefinitionList):
         table_number = tuple(
-            str(i) for i in get_elem_count(
+            str(i) for i in utils.get_elem_count(
                 doc,
                 pf.Table,
                 register='table',
@@ -238,7 +245,7 @@ def render_table_footer_latex(elem, doc, tex):
                 term = ''.join(pf.stringify(e) for e in definition_item.term)
 
                 definitions = [
-                    panflute2output(d.content, format='latex')
+                    utils.panflute2output(d.content, format='latex')
                     for d in definition_item.definitions
                 ]
 
@@ -248,7 +255,7 @@ def render_table_footer_latex(elem, doc, tex):
 def links_to_table_notes(elem, doc):
     if isinstance(elem, pf.Link) and 'table_note' in elem.classes:
         table_number = tuple(
-            str(i) for i in get_elem_count(
+            str(i) for i in utils.get_elem_count(
                 doc,
                 pf.Table,
                 register='table',
@@ -316,7 +323,7 @@ def render_table_latex(elem, doc):
             for c, cell in enumerate(row.content):
                 cell = cell.walk(links_to_table_notes)
                 cell_wrapper = lc.Span()
-                content = panflute2output(cell.content, format='latex')
+                content = utils.panflute2output(cell.content, format='latex')
 
                 cell_width = widths[c]
                 if cell.col_span > 1:
@@ -378,7 +385,7 @@ def render_table_latex(elem, doc):
 def render_table_odt(elem, doc):
     table = elem.content[0]
     table_number = tuple(
-        str(i) for i in get_elem_count(
+        str(i) for i in utils.get_elem_count(
             doc,
             pf.Table,
             register='table',
@@ -450,7 +457,7 @@ def render_table_odt(elem, doc):
     for w, width in enumerate(widths):
         column_style_name = '{table_name}.{c}'.format(
             table_name=table_name,
-            c=number_to_uppercase(w)
+            c=utils.number_to_uppercase(w)
         )
         column_style_names.append(column_style_name)
 
@@ -529,7 +536,7 @@ def render_table_odt(elem, doc):
                     ] = cell.col_span
 
                 if cell.content:
-                    cell_content = panflute2output(
+                    cell_content = utils.panflute2output(
                         cell.content,
                         format='opendocument'
                     ).strip()
@@ -590,13 +597,13 @@ def render_table_odt(elem, doc):
     doc.auto_styles.append(styles)
 
     table = '\n'.join(str(c) for c in table_root.contents)
-    print(table)
     return table
 
 
+@utils.make_dependent()
 def _prepare(doc):
     custom_styles_root = BeautifulSoup('', 'xml')
-    custom_styles_root.append(create_nested_tags(**{
+    custom_styles_root.append(utils.create_nested_tags(**{
         'name': 'style:style',
         'attrs': {
             'style:name': 'Keep_20_Caption_With_Next',
@@ -632,29 +639,21 @@ def _prepare(doc):
     ]
 
 
+@utils.make_dependent()
 def _finalize(doc):
     doc.metadata['custom-automatic-styles'] = pf.MetaInlines(
         pf.RawInline('\n'.join(doc.auto_styles), format='opendocument')
     )
 
 
-prepare_dependency = utils.Dependent(_prepare)
-finalize_dependency = utils.Dependent(_finalize)
-xml_code_to_table_dependency = utils.Dependent(xml_code_to_table)
-render_table_dependency = utils.Dependent(render_table)
-
-
 def main(doc=None):
-    order = utils.resolve_dependencies([
-        xml_code_to_table_dependency,
-        render_table_dependency,
-    ])
-    filters = [d.object_ for d in order]
-
     pf.run_filters(
-        filters,
-        finalize=utils.function_fron_dependencies([finalize_dependency]),
-        prepare=utils.function_fron_dependencies([prepare_dependency]),
+        utils.reduce_dependencies(
+            xml_code_to_table,
+            render_table,
+        ),
+        finalize=_finalize.to_function(),
+        prepare=_prepare.to_function(),
         doc=doc
     )
 

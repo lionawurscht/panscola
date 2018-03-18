@@ -1,12 +1,18 @@
 #!/usr/bin/env python
+if __name__ == "__main__" and __package__ is None:
+    from sys import path
+    from os.path import dirname as dir
+
+    path.append(dir(path[0]))
+
 import string
 import regex as re
 
 import panflute as pf
 import inflect
 
-import utils
-from utils import re_split
+from panscola import utils
+
 
 # For plurals
 pluralize = inflect.engine()
@@ -14,7 +20,15 @@ pluralize = inflect.engine()
 is_abbreviation = re.compile(r'\+{1,2}´?(?:([^´\s_\+]+)´?)_')
 
 
+@utils.make_dependent()
 def parse_abbreviations(elem, doc):
+    """Looks for divs with 'abbr' in their classes, then creates an
+    abbreviation where the abbreviation is the div's attribute 'short'
+    and the content of the div is the long version.
+
+    :param elem:
+    :param doc:
+    """
     if isinstance(elem, pf.Div) and 'abbr' in elem.classes:
         short = elem.attributes['short']
         identifier = elem.attributes.get('name', short.lower())
@@ -34,7 +48,7 @@ def parse_abbreviations(elem, doc):
 
     elif hasattr(elem, 'text') and is_abbreviation.search(elem.text):
         content = []
-        for s, c in re_split(is_abbreviation, elem.text):
+        for s, c in utils.re_split(is_abbreviation, elem.text):
             content.append(s)
             if c:
                 pl = '1' if elem.text.startswith('++') else ''
@@ -70,6 +84,8 @@ def parse_abbreviations(elem, doc):
         return pf.Span(*content)
 
 
+
+@utils.make_dependent()
 def render_abbreviations(elem, doc):
     if isinstance(elem, pf.Link) and 'abbr' in elem.classes:
         identifier = elem.attributes['identifier']
@@ -136,6 +152,7 @@ def render_abbreviations(elem, doc):
                 )
 
 
+@utils.make_dependent()
 def _prepare(doc):
     doc.abbr = {
         'definitions': dict(),
@@ -146,7 +163,12 @@ def _prepare(doc):
     }
 
 
+@utils.make_dependent()
 def _finalize(doc):
+    """_finalize
+
+    :param doc:
+    """
     appendix = doc.abbr['appendix']
     if appendix:
         heading = pf.Header(
@@ -164,23 +186,14 @@ def _finalize(doc):
     )
 
 
-prepare_dependency = utils.Dependent(_prepare)
-finalize_dependency = utils.Dependent(_finalize)
-parse_abbreviations_dependency = utils.Dependent(parse_abbreviations)
-render_abbreviations_dependency = utils.Dependent(render_abbreviations)
-
-
 def main(doc=None):
-    order = utils.resolve_dependencies([
-        parse_abbreviations_dependency,
-        render_abbreviations_dependency,
-    ])
-    filters = [d.object_ for d in order]
-
     pf.run_filters(
-        filters,
-        finalize=utils.function_fron_dependencies([finalize_dependency]),
-        prepare=utils.function_fron_dependencies([prepare_dependency]),
+        utils.reduce_dependencies(
+            parse_abbreviations,
+            render_abbreviations,
+        ),
+        finalize=_finalize.to_function(),
+        prepare=_prepare.to_function(),
         doc=doc
     )
 

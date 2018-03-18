@@ -1,11 +1,16 @@
 #!/usr/bin/env python
+if __name__ == "__main__" and __package__ is None:
+    from sys import path
+    from os.path import dirname as dir
+
+    path.append(dir(path[0]))
+
 import regex as re
 
 import panflute as pf
 
-import process_headers
-import utils
-from utils import re_split, format_names
+from panscola import process_headers
+from panscola import utils
 
 
 class myCitation(pf.Citation):
@@ -25,6 +30,7 @@ str_is_cite = re.compile(r'(\[(?:(?:[^\s\[\]]+),?)+\]_)')
 citation = re.compile(r'[^\s\[\],]+')
 
 
+@utils.make_dependent(process_headers.process_headers)
 def parse_citations(elem, doc):
     if isinstance(elem, pf.Link) and 'table_note' not in elem.classes:
         text = pf.stringify(elem)
@@ -39,7 +45,7 @@ def parse_citations(elem, doc):
         text = elem.text
         if str_is_cite.search(text):
             content = []
-            for s, c in re_split(str_is_cite, text):
+            for s, c in utils.re_split(str_is_cite, text):
                 content.append(s)
                 if c:
                     content.append(to_cite(c, doc))
@@ -47,6 +53,7 @@ def parse_citations(elem, doc):
             return pf.Span(*content)
 
 
+@utils.make_dependent()
 def render_citations(elem, doc, string=False):
     if isinstance(elem, pf.Cite):
         if (
@@ -94,7 +101,7 @@ def render_citations(elem, doc, string=False):
                         )
 
                         if names_list:
-                            names.extend(format_names(names_list))
+                            names.extend(utils.format_names(names_list))
                             if not i == amount_citations:
                                 names.extend([pf.Str(', '), pf.Space])
 
@@ -131,40 +138,24 @@ def to_cite(text, doc):
     return myCite(citations=citations, latex_command=specifier)
 
 
+@utils.make_dependent(process_headers._prepare)
 def _prepare(doc):
     pass
 
 
+@utils.make_dependent()
 def _finalize(doc):
     pass
 
 
-prepare_dependency = utils.Dependent(
-    _prepare,
-    [process_headers.prepare_dependency]
-)
-
-finalize_dependency = utils.Dependent(_finalize)
-
-parse_citations_dependecy = utils.Dependent(
-    parse_citations,
-    [process_headers.process_headers_dependency]
-)
-
-render_citations_dependency = utils.Dependent(render_citations)
-
-
 def main(doc=None):
-    order = utils.resolve_dependencies([
-        parse_citations_dependecy,
-        render_citations_dependency
-    ])
-    filters = [d.object_ for d in order]
-
     pf.run_filters(
-        filters,
-        finalize=utils.function_fron_dependencies([finalize_dependency]),
-        prepare=utils.function_fron_dependencies([prepare_dependency]),
+        utils.reduce_dependencies(
+            parse_citations,
+            render_citations,
+        ),
+        finalize=_finalize.to_function(),
+        prepare=_prepare.to_function(),
         doc=doc
     )
 

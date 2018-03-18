@@ -1,15 +1,21 @@
 #!/usr/bin/env python
+if __name__ == "__main__" and __package__ is None:
+    from sys import path
+    from os.path import dirname as dir
+
+    path.append(dir(path[0]))
+
 import regex as re
 import pprint
 
 import panflute as pf
 from bs4 import BeautifulSoup
 
-import table
-import process_headers
-import abbreviations
-import citations
-import utils
+from panscola import table
+from panscola import process_headers
+from panscola import abbreviations
+from panscola import citations
+from panscola import utils
 
 
 # For pretty printing dicts
@@ -24,6 +30,7 @@ def print(*x): pf.debug(*(pp.pformat(p) for p in x))
 """Make toc-title a raw inline for odt"""
 
 
+@utils.make_dependent()
 def repair_toc_title(elem, doc):
     if doc.format == 'odt' and isinstance(elem, pf.MetaMap):
         for key, value in elem.content.items():
@@ -39,6 +46,7 @@ likewise with '::comment-end'
 """
 
 
+@utils.make_dependent()
 def comment(elem, doc):
     text = pf.stringify(elem).strip()
     is_relevant = isinstance(elem, pf.Str) and text.startswith('::comment-')
@@ -242,57 +250,42 @@ def list_to_elems(list_):
             yield pf.Plain(pf.Str(str(i)))
 
 
+@utils.make_dependent(
+    process_headers._prepare,
+    table._prepare,
+    citations._prepare,
+    abbreviations._prepare,
+)
 def _prepare(doc):
     # for the comment filter
     doc.ignore = 0
 
 
+@utils.make_dependent(
+    process_headers._finalize,
+    table._finalize,
+    citations._finalize,
+    abbreviations._finalize,
+)
 def _finalize(doc):
     pass
 
 
-prepare_dependency = utils.Dependent(
-    _prepare,
-    [
-        table.prepare_dependency,
-        process_headers.prepare_dependency,
-        citations.prepare_dependency,
-        abbreviations.prepare_dependency,
-    ],
-)
-
-finalize_dependency = utils.Dependent(
-    _finalize,
-    [
-        table.finalize_dependency,
-        process_headers.finalize_dependency,
-        citations.finalize_dependency,
-        abbreviations.finalize_dependency,
-    ],
-)
-
-comments_dependency = utils.Dependent(comment)
-repair_toc_title_dependency = utils.Dependent(repair_toc_title)
-
-
 def main(doc=None):
-    order = utils.resolve_dependencies([
-        process_headers.process_headers_dependency,
-        comments_dependency,
-        table.xml_code_to_table_dependency,
-        citations.parse_citations_dependecy,
-        abbreviations.parse_abbreviations_dependency,
-        citations.render_citations_dependency,
-        abbreviations.render_abbreviations_dependency,
-        table.render_table_dependency,
-        repair_toc_title_dependency,
-    ])
-    filters = [d.object_ for d in order]
-
     pf.run_filters(
-        filters,
-        finalize=utils.function_fron_dependencies([finalize_dependency]),
-        prepare=utils.function_fron_dependencies([prepare_dependency]),
+        utils.reduce_dependencies(
+            process_headers.process_headers,
+            comment,
+            table.xml_code_to_table,
+            citations.parse_citations,
+            abbreviations.parse_abbreviations,
+            citations.render_citations,
+            abbreviations.render_abbreviations,
+            table.render_table,
+            repair_toc_title,
+        ),
+        finalize=_finalize.to_function(),
+        prepare=_prepare.to_function(),
         doc=doc
     )
 
