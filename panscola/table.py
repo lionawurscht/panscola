@@ -645,6 +645,10 @@ def _finalize(doc):
         pf.RawInline('\n'.join(doc.auto_styles), format='opendocument')
     )
 
+    doc.metadata['sequence-decls'] = pf.MetaInlines(
+        pf.RawInline('\n'.join(doc.sequence_decls), format='opendocument')
+    )
+
 
 def main(doc=None):
     pf.run_filters(
