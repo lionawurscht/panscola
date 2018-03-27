@@ -22,19 +22,29 @@ from panscola import latex_classes as lc
 
 
 class Table(pf.Table):
+    __slots__ = ['_col_cnt', '_row_cnt', 'total_width', '_col_cnt', '_row_cnt']
+
     def __init__(
         self,
         *args,
         col_cnt=None,
         row_cnt=None,
         total_width=0.8,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(*args, **kwargs)
 
-        self.col_cnt = utils.check_type(col_cnt, int)
-        self.row_cnt = utils.check_type(row_cnt, int)
+        self._col_cnt = utils.check_type(col_cnt, int)
+        self._row_cnt = utils.check_type(row_cnt, int)
         self.total_width = utils.check_type(total_width, float)
+
+    @property
+    def col_cnt(self):
+        return self._col_cnt
+
+    @property
+    def row_cnt(self):
+        return self._row_cnt
 
 
 class TableCell(pf.TableCell):
@@ -45,6 +55,8 @@ class TableCell(pf.TableCell):
         row_span=1,
         covered=False,
         rm_horizontal_margins=False,
+        vertical=False,
+        heading=0,
         **kwargs
     ):
         super().__init__(*args, **kwargs)
@@ -54,6 +66,8 @@ class TableCell(pf.TableCell):
         self.covered = utils.check_type(covered, bool)
         self.rm_horizontal_margins = utils.check_type(rm_horizontal_margins,
                                                       bool)
+        self.vertical = utils.check_type(vertical, bool)
+        self.heading = utils.check_type(heading, int)
 
 
 class TableRow(pf.TableRow):
@@ -88,17 +102,26 @@ def xml_code_to_table(elem, doc):
 
 
 def xml_to_table_matrix(xml_input):
-    table_soup = BeautifulSoup(xml_input, 'xml')
+    table_soup = BeautifulSoup(xml_input, 'lxml')
+    table_base = table_soup.html.body
+    options = {}
+    if table_base.options:
+        if len(table_base.find_all('options')) > 1:
+            raise ValueError('There should only be one set of options.')
+        options = table_base.options.attrs
+        width = options.get('width', None)
+        if width is not None:
+            width = [float(w) for w in width.split(',')]
+        options['width'] = width
 
-    if len(table_soup.table.find_all('caption')) > 1:
-        raise ValueError('There should only be one caption.')
-    caption = ''.join(str(c) for c in table_soup.caption.contents)
-
-    if len(table_soup.find_all('table')) > 1:
-        raise ValueError('There should only be one table.')
+    caption = ''
+    if table_base.caption:
+        if len(table_base.find_all('caption')) > 1:
+            raise ValueError('There should only be one caption.')
+        caption = ''.join(str(c) for c in table_base.caption.contents)
 
     rows = []
-    for row in table_soup.table.find_all('row'):
+    for row in table_base.find_all('row'):
         row_attributes = row.attrs
         row_attributes['underlines'] = [
             tuple(utils.check_type(i, int) for i in u.strip().split('-'))
@@ -117,11 +140,14 @@ def xml_to_table_matrix(xml_input):
 
         rows.append([tuple(cells), row_attributes])
 
-    if len(table_soup.table.find_all('footnotes')) > 1:
-        raise ValueError('There should only be one footnote definition.')
-    footnotes = ''.join(str(c) for c in table_soup.footnotes.contents)
+    footnotes = ''
+    if table_base.footnotes:
+        if len(table_base.find_all('footnotes')) > 1:
+            raise ValueError('There should only be one footnote definition.')
 
-    return([caption, rows, footnotes])
+        footnotes = ''.join(str(c) for c in table_base.footnotes.contents)
+
+    return([options, caption, rows, footnotes])
 
 
 str_is_table_link = re.compile(r'\[\^((?:[^\s\[\]]+),?)+\]_')
@@ -137,9 +163,11 @@ def table_links(elem, doc):
 
 
 def table_matrix_to_pf(matrix, doc):
-    caption = matrix[0]
-    table = matrix[1]
-    footnotes = [i for i in list_to_elems([matrix[2]])]
+    options = matrix[0]
+    t_kwargs = options
+    caption = matrix[1]
+    table = matrix[2]
+    footnotes = [i for i in list_to_elems([matrix[3]])]
 
     row_cnt = len(table)
 
@@ -151,19 +179,26 @@ def table_matrix_to_pf(matrix, doc):
         cells = []
         r_kwargs = row[1]
         for c, cell in enumerate(row[0]):
-            new_col_cnt += 1
             if isinstance(cell, tuple):
                 c_args = cell[0]
                 c_kwargs = cell[1]
 
                 col_span = utils.check_type(c_kwargs.get('col_span', 1), int)
 
-                cells.append(TableCell(*list_to_elems(c_args), **c_kwargs))
+                repeat = 1
+                if 'repeat' in c_kwargs:
+                    repeat = utils.check_type(c_kwargs.get('repeat', 1), int)
+                    del c_kwargs['repeat']
 
-                for i in range(1, col_span):
+                for _ in range(repeat):
                     new_col_cnt += 1
-                    cells.append(TableCell(pf.Null(), covered=True))
+                    cells.append(TableCell(*list_to_elems(c_args), **c_kwargs))
+
+                    for i in range(1, col_span):
+                        new_col_cnt += 1
+                        cells.append(TableCell(pf.Null(), covered=True))
             else:
+                new_col_cnt += 1
                 cells.append(TableCell(*list_to_elems([cell])))
         if old_col_cnt is None:
             old_col_cnt = new_col_cnt
@@ -178,7 +213,6 @@ def table_matrix_to_pf(matrix, doc):
 
         rows.append(TableRow(*cells, **r_kwargs))
 
-    t_kwargs = {}
     if caption:
         t_kwargs['caption'] = [pf.Span(pf.Str(caption))]
 
@@ -186,7 +220,8 @@ def table_matrix_to_pf(matrix, doc):
         Table(
             *rows,
             col_cnt=old_col_cnt,
-            row_cnt=row_cnt, **t_kwargs
+            row_cnt=row_cnt,
+            **t_kwargs
         ),
         *footnotes,
         classes=['custom_table'],
@@ -301,7 +336,12 @@ def render_table_latex(elem, doc):
         columns=''.join(['p{{{}\\textwidth}}'.format(w) for w in widths]),
     )
 
+    tex.append(pl.Command(
+        'renewcommand',
+        arguments=[pl.Command('tabcolsep'), '0.3em'],
+    ))
     with tex.create(lc.myLongTable(table_spec, booktabs=True)) as lt:
+
         if hasattr(table, 'caption') and table.caption:
             lt.append(pl.Command(
                 'caption',
@@ -325,16 +365,35 @@ def render_table_latex(elem, doc):
                 cell_wrapper = lc.Span()
                 content = utils.panflute2output(cell.content, format='latex')
 
+                style = ''
+                if cell.heading == 1:
+                    style = '\\sffamily '
+                elif cell.heading == 2:
+                    style = '\\sffamily\\small '
+
+                content = style + content
+
                 cell_width = widths[c]
                 if cell.col_span > 1:
                     cell_width = sum(widths[c:c+cell.col_span])
 
                 minipage = pl.MiniPage(
                     width='{}\\columnwidth'.format(cell_width),
-                    pos='t',
+                    pos='b',
                     align='right',
+                    content_pos='b',
                 )
-                minipage.append(pl.NoEscape(content))
+
+                if cell.vertical:
+                    minipage.append(
+                        lc.RotateBox(pl.NoEscape(content))
+                    )
+                else:
+                    minipage.append(
+                        pl.NoEscape(content)
+                    )
+
+                cell_wrapper.append(pl.Command('noindent'))
                 cell_wrapper.append(minipage)
 
                 if cell.col_span > 1:
@@ -437,7 +496,7 @@ def render_table_odt(elem, doc):
     }
     table_root.contents.append(table_odt)
     try:
-        footer = elem.content[1]
+        footer = elem.content[1].content[0]
     except IndexError:
         footer = None
 
@@ -518,6 +577,7 @@ def render_table_odt(elem, doc):
                         'fo:padding-right': '0.10cm',
                         'fo:padding-top': '0.10cm',
                         'fo:padding-bottom': '0.10cm',
+                        'style:vertical-align': 'bottom',
                 }
                 style_background_image = Tag(name='style:background-image')
                 style_cell_properies.contents.append(style_background_image)
@@ -546,8 +606,27 @@ def render_table_odt(elem, doc):
                         'lxml'
                     ).html.body
 
-                    for t in cell_content.find_all('text:p'):
-                        t.attrs['text:style-name'] = 'Table_20_contents'
+                    text_p = re.compile('text:p')
+                    for t in cell_content.find_all(text_p):
+                        pf.debug(t)
+                        if cell.heading == 1:
+                            t['text:style-name'] = 'Table_20_Heading'
+                        elif cell.heading == 2:
+                            t['text:style-name'] = 'Table_20_Subheading'
+                        else:
+                            t['text:style-name'] = 'Table_20_Contents'
+
+                        if cell.vertical:
+                            t_contents = t.contents
+                            t.contents = [
+                                utils.create_nested_tags(**{
+                                    'name': 'text:span',
+                                    'attrs': {
+                                        'text:style-name': 'Vertical',
+                                    },
+                                    'contents': t_contents,
+                                })
+                            ]
                     cell_odt.contents = cell_content.contents
                 else:
                     cell_content = Tag(name='text:p')
@@ -593,15 +672,55 @@ def render_table_odt(elem, doc):
 
         table_odt.contents.append(row_odt)
 
+    if footer is not None:
+        for definition_item in footer.content:
+            term = ''.join(pf.stringify(e) for e in definition_item.term)
+
+            definitions = [
+                utils.panflute2output(d.content, format='opendocument')
+                for d in definition_item.definitions
+            ]
+            definitions_parsed = BeautifulSoup(
+                ''.join(definitions),
+                'lxml'
+            ).html.body.contents
+            for t in definitions_parsed:
+                if t.name == 'text:p':
+                    t.name = 'text:span'
+                    t.contents.insert(0, NavigableString(' '))
+
+            definition = utils.create_nested_tags(**{
+                'name': 'text:p',
+                'attrs': {
+                    'text:style-name': 'Table_20_Legend',
+                },
+                'contents': [
+                    {
+                        'name': 'text:span',
+                        'attrs': {
+                            'text:style-name': 'Superscript',
+                        },
+                        'contents': [
+                            term,
+                        ],
+                    },
+                ] + definitions_parsed
+
+            })
+            table_root.contents.append(definition)
+
     styles = '\n'.join(c.prettify() for c in styles.contents)
     doc.auto_styles.append(styles)
 
     table = '\n'.join(str(c) for c in table_root.contents)
+    #pf.debug(table)
     return table
 
 
 @utils.make_dependent()
 def _prepare(doc):
+    doc.auto_styles = getattr(doc, 'auto_styles', [])
+
     custom_styles_root = BeautifulSoup('', 'xml')
     custom_styles_root.append(utils.create_nested_tags(**{
         'name': 'style:style',
@@ -618,7 +737,48 @@ def _prepare(doc):
         ],
     }))
 
-    doc.auto_styles = []
+    custom_styles_root.append(utils.create_nested_tags(**{
+        'name': 'style:style',
+        'attrs': {
+            'style:name': 'Vertical',
+            'style:family': 'text',
+        },
+        'contents': [
+            {
+                'name': 'style:text-properties',
+                'attrs': {
+                    'style:text-rotation-angle': '90',
+                    'style:text-rotation-scale': 'line-height',
+                },
+            },
+        ],
+    }))
+
+    custom_styles_root.append(utils.create_nested_tags(**{
+        'name': 'style:style',
+        'attrs': {
+            'style:name': 'Table_20_Legend',
+            'style:family': 'paragraph',
+            'style:parent-style-name': 'Standard',
+        },
+        'contents': [
+            {
+                'name': 'style:paragraph-properties',
+                'attrs': {
+                    'fo:margin-left': '0.1799in',
+                    'fo-margin-right': '0in',
+                    'fo-margin-top': '0.1598in',
+                    'fo-margin-bottom': '0.2in',
+                    'loext:contextual-spacing': 'true',
+                    'fo:text-indent': '0in',
+                },
+            },
+        ],
+    }))
+
+    doc.auto_styles.extend([
+        '\n'.join(cs.prettify() for cs in custom_styles_root.contents)
+    ])
 
     sequence_decls_root = BeautifulSoup('', 'xml')
     sequence_decls = Tag(name='text:sequence-decls')
@@ -658,7 +818,7 @@ def main(doc=None):
         ),
         finalize=_finalize.to_function(),
         prepare=_prepare.to_function(),
-        doc=doc
+        doc=doc,
     )
 
 

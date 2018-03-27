@@ -80,3 +80,10 @@ class myLongTable(pl.LongTable):
         ).dumps_content(**kwargs)
 
         return pl.NoEscape(content)
+
+
+class RotateBox(pl.base_classes.ContainerCommand):
+    content_separator = ' '
+
+    def __init__(self, data=None, degrees='90'):
+        super().__init__(arguments=degrees, data=data)

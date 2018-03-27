@@ -22,7 +22,8 @@ is_abbreviation = re.compile(r'\+{1,2}´?(?:([^´\s_\+]+)´?)_')
 
 @utils.make_dependent()
 def parse_abbreviations(elem, doc):
-    """Looks for divs with 'abbr' in their classes, then creates an
+    """
+    Looks for divs with 'abbr' in their classes, then creates an
     abbreviation where the abbreviation is the div's attribute 'short'
     and the content of the div is the long version.
 
@@ -82,7 +83,6 @@ def parse_abbreviations(elem, doc):
                 ))
 
         return pf.Span(*content)
-
 
 
 @utils.make_dependent()

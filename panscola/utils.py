@@ -13,17 +13,22 @@ import panflute as pf
 class Dependent:
     """A class to help manage dependencies within my filters.
     Classes that inherit from it are automatically created using the
-    decorator :func:`make_dependent`.
+    decorator :func:`make_dependent`. No instances of this class are
+    usually created. Instead, calling it is equivalent to calling it's
+    object.
     """
-    object_ = None
-    dependencies = []
+    _object = None
+    _dependencies = []
 
-    def __init__(self, object_=None, dependencies=None):
-        if dependencies is not None:
-            self.dependencies = check_type_strictly(dependencies, list)
+    def __new__(cls, *args, **kwargs):
+        return cls._object(*args, **kwargs)
 
-        if object_ is not None:
-            self.object_ = object_
+    def __init__(self, _object=None, _dependencies=None):
+        if _dependencies is not None:
+            self._dependencies = check_type_strictly(_dependencies, list)
+
+        if _object is not None:
+            self._object = _object
 
     @classmethod
     def resolve_dependencies(cls, resolved=None, seen=None):
@@ -42,14 +47,14 @@ class Dependent:
 
     @classmethod
     def __repr__(cls):
-        if hasattr(cls.object_, '__name__'):
-            return cls.object_.__name__
+        if hasattr(cls._object, '__name__'):
+            return cls._object.__name__
         else:
-            return repr(cls.object_)
+            return repr(cls._object)
 
     @classmethod
     def add_dependency(cls, dependency):
-        cls.dependencies.append(dependency)
+        cls._dependencies.append(dependency)
 
     @classmethod
     def add_dependencies(cls, *dependencies):
@@ -62,7 +67,7 @@ class Dependent:
 
         def run_functions(*args):
             for a in actions:
-                a.object_(*args)
+                a._object(*args)
 
         return run_functions
 
@@ -95,7 +100,7 @@ def resolve_dependencies(dependent, resolved=None, seen=None):
         if dependent not in resolved:
             seen.append(dependent)
 
-            for dependency in dependent.dependencies:
+            for dependency in dependent._dependencies:
                 if dependency not in resolved:
                     if dependency in seen:
                         raise Exception('Circular dependency')
@@ -133,14 +138,21 @@ def make_dependent(*dependencies):
         inner_dependencies = dependencies
 
         class Wrapped(Dependent):
-            object_ = func
-            dependencies = inner_dependencies
+            _object = func
+            _dependencies = inner_dependencies
 
         # Make the wrapped class have the original functions attributed
         for attr in functools.WRAPPER_ASSIGNMENTS:
             setattr(Wrapped, attr, getattr(func, attr))
 
-        setattr(Wrapped, '__signature__', inspect.signature(func))
+        doc = getattr(func, '__doc__', '')
+        doc = '' if doc is None else doc
+
+        signature = str(inspect.signature(func))
+        name = getattr(func, '__name__')
+
+        doc = f'{name}{signature}\n' + doc
+        setattr(Wrapped, '__doc__', doc)
 
         return Wrapped
 
@@ -155,7 +167,7 @@ def reduce_dependencies(*list_):
     :returns: A list of functions, hopefully in the order of their
               depencency.
     """
-    return [i.object_
+    return [i._object
             for i in functools.reduce(
                 reduce_dependencies_helper,
                 [None] + list(list_),
@@ -347,14 +359,17 @@ def get_elem_count(doc, types, level=1, register=None):
 
 
 def create_nested_tags(**kwargs):
-    """Creates nested XML-tags from dictionary. If the dictionary contains a
-    value for ``'contents'`` which should be a list of dictionaries then this
-    function will be called recursively on these dictionaries and the returned
-    tags will be appended to the root one.
+    """Creates nested :class:`~bs4.element.Tag` from dictionary. The
+    dictionary may contain a value for the key `contents`.  This should
+    be a list of
+    dictionaries or strings.
+    Dictionaries will be processed recursively and the returnes tag will
+    be appeneded to the parent tag.  Strings will be made a
+    :class:`~bs4.element.NavigableString` and appended to the parent tag.
 
     :param **kwargs: a dictionary with kwargs that will be passed to
-                     :class:`bs4.elements.Tag`. It should at least
-                     contain an entry for `name`
+                     :class:`~bs4.elements.Tag`. It should at least
+                     contain a value for the key `name`
     """
 
     contents = None
@@ -368,10 +383,16 @@ def create_nested_tags(**kwargs):
         for c in contents:
             if isinstance(c, dict):
                 tag.contents.append(create_nested_tags(**c))
+            elif isinstance(c, bs4.element.Tag):
+                tag.contents.append(c)
             else:
                 tag.contents.append(bs4.element.NavigableString(str(c)))
 
     return tag
+
+
+def soup_to_string(soup, seperator=''):
+    return seperator.join(s.prettify() for s in soup.contents)
 
 
 def re_split(regex, string):
@@ -459,6 +480,13 @@ def num_to_base_tuple(number, base):
     return collect
 
 
+def test():
+    """test(name)
+    aber aber aber
+    """
+    pass
+
+
 def main():
 
     @make_dependent()
@@ -470,6 +498,7 @@ def main():
         print(name)
 
     print(type(popel))
+    print(popel("Lion"))
     print(popel.to_function())
     print(reduce_dependencies(popel))
 

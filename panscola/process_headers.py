@@ -31,7 +31,7 @@ def process_headers(elem, doc):
         if bib_file is not None:
             with open(bib_file) as bf:
                 parser = bibtexparser.bparser.BibTexParser(
-                    ignore_nonstandard_types=False
+                    ignore_nonstandard_types=False,
                 )
                 parser.customization = bibtexparser_customizations
                 doc.bibliography = bibtexparser.load(

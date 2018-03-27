@@ -16,6 +16,7 @@ from panscola import process_headers
 from panscola import abbreviations
 from panscola import citations
 from panscola import utils
+from panscola import boxes
 
 
 # For pretty printing dicts
@@ -255,6 +256,7 @@ def list_to_elems(list_):
     table._prepare,
     citations._prepare,
     abbreviations._prepare,
+    boxes._prepare,
 )
 def _prepare(doc):
     # for the comment filter
@@ -266,6 +268,7 @@ def _prepare(doc):
     table._finalize,
     citations._finalize,
     abbreviations._finalize,
+    boxes._finalize
 )
 def _finalize(doc):
     pass
@@ -279,6 +282,7 @@ def main(doc=None):
             table.xml_code_to_table,
             citations.parse_citations,
             abbreviations.parse_abbreviations,
+            boxes.boxes,
             citations.render_citations,
             abbreviations.render_abbreviations,
             table.render_table,
