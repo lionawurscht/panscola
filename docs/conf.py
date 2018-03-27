@@ -44,6 +44,7 @@ extensions = [
     'sphinx.ext.todo',
     'sphinx.ext.coverage',
     'sphinx.ext.viewcode',
+    'sphinx.ext.intersphinx',
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -162,7 +163,23 @@ texinfo_documents = [
 
 # -- Extension configuration -------------------------------------------------
 
+# -- Options for autodoc extension -------------------------------------------
+add_module_names = False
+
 # -- Options for todo extension ----------------------------------------------
 
 # If true, `todo` and `todoList` produce output, else they produce nothing.
 todo_include_todos = True
+
+# -- Options for intersphinx extension ---------------------------------------
+intersphinx_mapping = {
+    'python': ('https://docs.python.org/3', None),
+    'panflute': (
+        'http://scorreia.com/software/panflute',
+        None,
+    ),
+    'beautifulsoup': (
+        'https://www.crummy.com/software/BeautifulSoup/bs4/doc',
+        None,
+    ),
+}
