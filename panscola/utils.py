@@ -5,6 +5,7 @@ import copy
 import io
 import string
 import functools
+import pyparsing as pp
 
 import bs4
 import panflute as pf
@@ -17,6 +18,7 @@ class Dependent:
     usually created. Instead, calling it is equivalent to calling it's
     object.
     """
+
     _object = None
     _dependencies = []
 
@@ -47,7 +49,7 @@ class Dependent:
 
     @classmethod
     def __repr__(cls):
-        if hasattr(cls._object, '__name__'):
+        if hasattr(cls._object, "__name__"):
             return cls._object.__name__
         else:
             return repr(cls._object)
@@ -103,7 +105,7 @@ def resolve_dependencies(dependent, resolved=None, seen=None):
             for dependency in dependent._dependencies:
                 if dependency not in resolved:
                     if dependency in seen:
-                        raise Exception('Circular dependency')
+                        raise Exception("Circular dependency")
                     resolve_dependencies(dependency, resolved, seen)
             resolved.append(dependent)
 
@@ -134,6 +136,7 @@ def make_dependent(*dependencies):
 
         b_func.resolve_dependencies()
     """
+
     def function_wrapper(func):
         inner_dependencies = dependencies
 
@@ -145,14 +148,14 @@ def make_dependent(*dependencies):
         for attr in functools.WRAPPER_ASSIGNMENTS:
             setattr(Wrapped, attr, getattr(func, attr))
 
-        doc = getattr(func, '__doc__', '')
-        doc = '' if doc is None else doc
+        doc = getattr(func, "__doc__", "")
+        doc = "" if doc is None else doc
 
         signature = str(inspect.signature(func))
-        name = getattr(func, '__name__')
+        name = getattr(func, "__name__")
 
-        doc = f'{name}{signature}\n' + doc
-        setattr(Wrapped, '__doc__', doc)
+        doc = f"{name}{signature}\n" + doc
+        setattr(Wrapped, "__doc__", doc)
 
         return Wrapped
 
@@ -167,11 +170,12 @@ def reduce_dependencies(*list_):
     :returns: A list of functions, hopefully in the order of their
               depencency.
     """
-    return [i._object
-            for i in functools.reduce(
-                reduce_dependencies_helper,
-                [None] + list(list_),
-            )[0]]
+    return [
+        i._object
+        for i in functools.reduce(
+            reduce_dependencies_helper, [None] + list(list_)
+        )[0]
+    ]
 
 
 def reduce_dependencies_helper(returned_value, dependent):
@@ -200,21 +204,120 @@ def check_type(input, type_):
     try:
         return type_(input)
     except TypeError:
-        raise TypeError("Couldn't convert {} of type {} to {}".format(
-            repr(input),
-            type(input).__name__,
-            type_.__name__
-        ))
+        raise TypeError(
+            "Couldn't convert {} of type {} to {}".format(
+                repr(input), type(input).__name__, type_.__name__
+            )
+        )
 
 
 def check_type_strictly(input, type_):
     if isinstance(input, type_):
         return input
     else:
-        raise TypeError('Expected input to be of type {}, was {}.'.format(
-            type_,
-            type(input),
-        ))
+        raise TypeError(
+            "Expected input to be of type {}, was {}.".format(
+                type_, type(input)
+            )
+        )
+
+
+_enclosed = pp.Forward()
+_nestedParens = pp.nestedExpr(opener="(", closer=")", content=_enclosed)
+_nestedBrackets = pp.nestedExpr(opener="[", closer="]", content=_enclosed)
+
+_enclosed << (
+    pp.delimitedList(
+        pp.pyparsing_common.number
+        | pp.QuotedString('"')
+        | pp.QuotedString("'")
+        | _nestedParens
+        | _nestedBrackets
+    )
+    | _nestedParens
+    | _nestedBrackets
+)
+
+_key = pp.Word(pp.alphas) + pp.Suppress("=")
+_dict_value = _enclosed + (pp.Suppress(",") | pp.Suppress(pp.SkipTo(")")))
+
+_args = pp.Optional(pp.delimitedList(_enclosed)).setResultsName("args") + (
+    pp.Suppress(",")
+    | pp.Suppress(pp.SkipTo(_key))
+    | pp.Suppress(pp.SkipTo(")"))
+)
+
+_kwargs = pp.Optional(pp.dictOf(_key, _dict_value)).setResultsName("kwargs")
+
+_parameters = (
+    pp.Suppress("(").leaveWhitespace() + _args + _kwargs + pp.Suppress(")")
+)
+
+_function = (
+    pp.Suppress("::")
+    + pp.Word(pp.alphas)
+    .leaveWhitespace()
+    .setResultsName("name", listAllMatches=True)
+    + _parameters
+)
+
+
+def options(elem, doc, **kwargs):
+    return None, kwargs
+
+
+def box(elem, doc, repeat):
+    return "[]" * repeat, None
+
+
+functions = {"options": options, "box": box}
+
+
+def run_functions(elem, doc):
+    string_ = pf.stringify(elem)
+    parts = []
+    returned_values = []
+    for string_, function in parse_functions(string_):
+        parts.append(string_)
+        if function is not None:
+            try:
+                load_function = functions[function[0]]
+                args = function[1]
+                kwargs = function[2]
+                new_string, return_dict = load_function(
+                    elem, doc, *args, **kwargs
+                )
+
+                if return_dict is not None:
+                    returned_values.append(return_dict)
+
+                if new_string is not None:
+                    parts.append(new_string)
+                    print(return_dict)
+            except KeyError:
+                pass
+    print(pf.convert_text("".join(parts), input_format="rst")[0])
+    print({k: v for x in returned_values for k, v in x.items()})
+
+
+def parse_functions(string):
+    last_end = 0
+    for token, start, end in _function.scanString(string):
+        print(token)
+        head = string[last_end:start]
+        name = token["name"][0]
+        kwargs = token.get("kwargs", None)
+        kwargs = {} if kwargs is None else kwargs.asDict()
+
+        args = token.get("args", None)
+        args = [] if args is None else args.asList()
+
+        yield head, (name, args, kwargs)
+
+        last_end = end
+
+    tail = string[last_end:-1]
+    yield tail, None
 
 
 def count_elements(elem, doc, relevant_elems, register=None, scope=None):
@@ -251,33 +354,27 @@ def count_elements(elem, doc, relevant_elems, register=None, scope=None):
             scope = (register, scope[1], scope[2])
         count_elements(elem, doc, scope[1], register=scope[0])
         if isinstance(scope[1], tuple):
-            scope_type_name = ''.join(t.__name__ for t in scope[1])
+            scope_type_name = "".join(t.__name__ for t in scope[1])
         elif isinstance(scope[1], type):
             scope_type_name = scope[1].__name__
 
     if isinstance(relevant_elems, tuple):
-        type_name = ''.join(t.__name__ for t in relevant_elems)
+        type_name = "".join(t.__name__ for t in relevant_elems)
     elif isinstance(relevant_elems, type):
         type_name = relevant_elems.__name__
 
     if isinstance(elem, relevant_elems):
 
         if register is None:
-            register = 'default'
+            register = "default"
 
         try:
             count_elems = doc.count_elems[register]
         except KeyError:
-            doc.count_elems[register] = {
-                type_name: [tuple(), 0]
-            }
+            doc.count_elems[register] = {type_name: [tuple(), 0]}
             count_elems = doc.count_elems[register]
         except AttributeError:
-            doc.count_elems = {
-                register: {
-                    type_name: [tuple(), 0]
-                }
-            }
+            doc.count_elems = {register: {type_name: [tuple(), 0]}}
             count_elems = doc.count_elems[register]
 
         try:
@@ -286,18 +383,16 @@ def count_elements(elem, doc, relevant_elems, register=None, scope=None):
             elem_counter = [tuple(), 0]
             count_elems[type_name] = elem_counter
 
-        index = 1 if not hasattr(elem, 'level') else elem.level
+        index = 1 if not hasattr(elem, "level") else elem.level
 
         if scope is not None:
             current_level = get_elem_count(
-                doc,
-                scope_type_name,
-                level=scope[2],
-                register=scope[0])
+                doc, scope_type_name, level=scope[2], register=scope[0]
+            )
             if current_level != elem_counter[0]:
-                count_elems[type_name] = ([current_level]
-                                          + [1] * (index - 1)
-                                          + [0])
+                count_elems[type_name] = (
+                    [current_level] + [1] * (index - 1) + [0]
+                )
 
                 elem_counter = count_elems[type_name]
 
@@ -307,7 +402,7 @@ def count_elements(elem, doc, relevant_elems, register=None, scope=None):
             for i in range(index - len(elem_counter)):
                 elem_counter.append(1)
             elem_counter.append(1)
-        del elem_counter[index+1:]
+        del elem_counter[index + 1 :]
 
 
 def get_elem_count(doc, types, level=1, register=None):
@@ -320,31 +415,33 @@ def get_elem_count(doc, types, level=1, register=None):
     """
 
     if isinstance(types, tuple):
-        type_name = ''.join(t.__name__ for t in types)
+        type_name = "".join(t.__name__ for t in types)
     elif isinstance(types, str):
         type_name = types
     elif isinstance(types, type):
         type_name = types.__name__
     else:
-        raise TypeError('types should be either a touple of types a type or '
-                        'a string')
+        raise TypeError(
+            "types should be either a touple of types a type or " "a string"
+        )
 
     if register is None:
-        register = 'default'
+        register = "default"
 
     try:
         count_elems = doc.count_elems[register]
         try:
             elem_counter = count_elems[type_name]
             try:
-                current_level = tuple(elem_counter[1:level+1])
+                current_level = tuple(elem_counter[1 : level + 1])
                 scope = elem_counter[0]
             except IndexError:
                 return (0,) * level
 
             if len(current_level) < level:
-                current_level = (current_level
-                                 + (1,) * (level - len(current_level)))
+                current_level = current_level + (1,) * (
+                    level - len(current_level)
+                )
 
             return scope + current_level
         except KeyError:
@@ -352,9 +449,7 @@ def get_elem_count(doc, types, level=1, register=None):
             return (0,) * level
 
     except KeyError:
-        doc.count_elems[register] = {
-            type_name: [tuple(), 0]
-        }
+        doc.count_elems[register] = {type_name: [tuple(), 0]}
         return (0,) * level
 
 
@@ -374,9 +469,9 @@ def create_nested_tags(**kwargs):
 
     contents = None
 
-    if 'contents' in kwargs:
-        contents = kwargs['contents']
-        del kwargs['contents']
+    if "contents" in kwargs:
+        contents = kwargs["contents"]
+        del kwargs["contents"]
 
     tag = bs4.element.Tag(**kwargs)
     if contents is not None:
@@ -391,7 +486,7 @@ def create_nested_tags(**kwargs):
     return tag
 
 
-def soup_to_string(soup, seperator=''):
+def soup_to_string(soup, seperator=""):
     return seperator.join(s.prettify() for s in soup.contents)
 
 
@@ -419,18 +514,18 @@ def format_names(names):
         return [first]
     elif len(names) == 1:
         second = pf.Emph(pf.Str(split_name(names[0])[0]))
-        return [first, pf.Str('and'), second]
+        return [first, pf.Str("and"), second]
     elif len(names) > 1:
-        return [first, pf.Str('et al.')]
+        return [first, pf.Str("et al.")]
 
 
 def split_name(name):
-    parts = name.split(' ')
-    parts = [p.strip(',. ') for p in parts]
+    parts = name.split(" ")
+    parts = [p.strip(",. ") for p in parts]
     return parts
 
 
-def panflute2output(elem, format='json', doc=None):
+def panflute2output(elem, format="json", doc=None):
     if not isinstance(elem, (list, pf.ListContainer)):
         elem = [elem]
 
@@ -438,6 +533,7 @@ def panflute2output(elem, format='json', doc=None):
         doc = pf.Doc(*elem, format=format, api_version=(1, 17, 3, 1))
     else:
         doc = copy.deepcopy(doc)
+        doc.content = elem
         doc.format = format
         doc.api_version = (1, 17, 3, 1)
 
@@ -445,11 +541,13 @@ def panflute2output(elem, format='json', doc=None):
         pf.dump(doc, f)
         ast = f.getvalue()
 
-    if format == 'json':
-        return ast
+    if format == "json":
+        return_value = ast
     else:
-        return pf.run_pandoc(text=ast,
-                             args=['-f', 'json', '-t', format, '--wrap=none'])
+        return_value = pf.run_pandoc(
+            text=ast, args=["-f", "json", "-t", format, "--wrap=none"]
+        )
+    return return_value
 
 
 def uppercase_range(length):
@@ -459,9 +557,10 @@ def uppercase_range(length):
 
 def number_to_uppercase(number):
     number_of_uppercase_letters = len(string.ascii_uppercase)
-    return ''.join(string.ascii_uppercase[i]
-                   for i in num_to_base_tuple(number,
-                                              number_of_uppercase_letters))
+    return "".join(
+        string.ascii_uppercase[i]
+        for i in num_to_base_tuple(number, number_of_uppercase_letters)
+    )
 
 
 def num_to_base_tuple(number, base):
@@ -480,6 +579,47 @@ def num_to_base_tuple(number, base):
     return collect
 
 
+false_strings = ("False", "false", "no", "No", "n", "N")
+true_strings = ("True", "true", "yes", "Yes", "y", "Y")
+
+
+def string_to_bool(
+    string,
+    default=False,
+    true_strings=true_strings,
+    false_strings=false_strings,
+):
+    if string in false_strings:
+        return False
+    elif string in true_strings:
+        return True
+    else:
+        return default
+
+
+numeric = "0123456789-."
+
+
+def string_to_float_unit(string):
+    string = string.strip()
+    for i, c in enumerate(string):
+        if c not in numeric:
+            break
+    try:
+        number = string[:i]
+        number = number.strip()
+        number = float(string[:i])
+    except ValueError:
+        raise ValueError(
+            f"Could not convert: {number!r} to float. "
+            f"Original string: {string!r}"
+        )
+    unit = string[i:]
+    unit = unit.strip()
+
+    return number, unit
+
+
 def test():
     """test(name)
     aber aber aber
@@ -488,7 +628,6 @@ def test():
 
 
 def main():
-
     @make_dependent()
     def popel(name):
         """A simple function.
@@ -503,5 +642,5 @@ def main():
     print(reduce_dependencies(popel))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

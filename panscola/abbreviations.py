@@ -17,7 +17,7 @@ from panscola import utils
 # For plurals
 pluralize = inflect.engine()
 
-is_abbreviation = re.compile(r'\+{1,2}´?(?:([^´\s_\+]+)´?)_')
+is_abbreviation = re.compile(r"\+{1,2}´?(?:([^´\s_\+]+)´?)_")
 
 
 @utils.make_dependent()
@@ -30,90 +30,97 @@ def parse_abbreviations(elem, doc):
     :param elem:
     :param doc:
     """
-    if isinstance(elem, pf.Div) and 'abbr' in elem.classes:
-        short = elem.attributes['short']
-        identifier = elem.attributes.get('name', short.lower())
+    if isinstance(elem, pf.Div) and "abbr" in elem.classes:
+        short = elem.attributes.pop("short")
+        identifier = elem.attributes.pop("name", short.lower())
         long_ = pf.stringify(elem).strip()
-        options = elem.attributes.get('options', '')
+        options = ",".join(
+            f"{key}={value}" for key, value in elem.attributes.items()
+        )
+        if options:
+            options = f"[{options}]"
 
-        doc.abbr['definitions'][identifier] = (short, long_, options)
+        doc.abbr["definitions"][identifier] = (short, long_, options)
 
-        if identifier not in doc.abbr['latex_preamble']:
-            doc.abbr['latex_preamble'][identifier] = pf.RawInline(
-                (f'\\newabbreviation{options}'
-                 f'{{{identifier}}}{{{short}}}{{{long_}}}\n'),
-                format='latex'
+        if identifier not in doc.abbr["latex_preamble"]:
+            doc.abbr["latex_preamble"][identifier] = pf.RawBlock(
+                (
+                    f"\\newabbreviation{options}"
+                    f"{{{identifier}}}{{{short}}}{{{long_}}}\n"
+                ),
+                format="latex",
             )
 
         return []
 
-    elif hasattr(elem, 'text') and is_abbreviation.search(elem.text):
+    elif hasattr(elem, "text") and is_abbreviation.search(elem.text):
         content = []
         for s, c in utils.re_split(is_abbreviation, elem.text):
             content.append(s)
             if c:
-                pl = '1' if elem.text.startswith('++') else ''
+                pl = "1" if elem.text.startswith("++") else ""
 
                 c = c.split("@")
                 if len(c) > 1:
                     specifier = c.pop(0)
                 else:
-                    specifier = ''
+                    specifier = ""
 
                 identifier = c.pop(0)
-                uppercase = ('1'
-                             if identifier[0] in string.ascii_uppercase
-                             else '')
+                uppercase = (
+                    "1" if identifier[0] in string.ascii_uppercase else ""
+                )
 
                 # Now we know whether it's uppercase
                 identifier = identifier.lower()
-                doc.abbr['used'].append(identifier)
+                doc.abbr["used"].append(identifier)
 
                 attributes = {
-                    'identifier': identifier,
-                    'plural': pl,
-                    'uppercase': uppercase,
-                    'specifier': specifier,
+                    "identifier": identifier,
+                    "plural": pl,
+                    "uppercase": uppercase,
+                    "specifier": specifier,
                 }
 
-                content.append(pf.Link(
-                    pf.Str(identifier),
-                    classes=['abbr'],
-                    attributes=attributes
-                ))
+                content.append(
+                    pf.Link(
+                        pf.Str(identifier),
+                        classes=["abbr"],
+                        attributes=attributes,
+                    )
+                )
 
         return pf.Span(*content)
 
 
 @utils.make_dependent()
 def render_abbreviations(elem, doc):
-    if isinstance(elem, pf.Link) and 'abbr' in elem.classes:
-        identifier = elem.attributes['identifier']
-        uppercase = elem.attributes['uppercase']
-        plural = elem.attributes['plural']
-        specifier = elem.attributes['specifier']
+    if isinstance(elem, pf.Link) and "abbr" in elem.classes:
+        identifier = elem.attributes["identifier"]
+        uppercase = elem.attributes["uppercase"]
+        plural = elem.attributes["plural"]
+        specifier = elem.attributes["specifier"]
 
-        if identifier not in doc.abbr['definitions']:
+        if identifier not in doc.abbr["definitions"]:
             return pf.Str(identifier)
         else:
-            abbr = doc.abbr['definitions'][identifier]
+            abbr = doc.abbr["definitions"][identifier]
             short = abbr[0]
             long_ = abbr[1]
             description = long_.title()  # needed later for definition liat
             options = abbr[2]
 
-            if doc.format == 'latex':
-                if identifier not in doc.abbr['rendered']:
-                    options = f'[{options}]'
-                    doc.abbr['rendered'].append(identifier)
+            if doc.format == "latex":
+                if identifier not in doc.abbr["rendered"]:
+                    options = f"[{options}]"
+                    doc.abbr["rendered"].append(identifier)
 
-                pl = 'pl' if plural else ''
-                gls = 'Gls' if uppercase else 'gls'
-                specifier = f'xtra{specifier}' if specifier else specifier
+                pl = "pl" if plural else ""
+                gls = "Gls" if uppercase else "gls"
+                specifier = f"xtra{specifier}" if specifier else specifier
 
                 raw = pf.RawInline(
-                    f'\\{gls}{specifier}{pl}{{{identifier}}}',
-                    format='latex'
+                    f"\\{gls}{specifier}{pl}{{{identifier}}}", format="latex"
                 )
 
                 return raw
@@ -125,41 +132,40 @@ def render_abbreviations(elem, doc):
                     short = pluralize.plural(short)
                     long_ = pluralize.plural(long_)
 
-                if identifier not in doc.abbr['rendered']:
-                    text = f'{long_} ({short})'
+                if identifier not in doc.abbr["rendered"]:
+                    text = f"{long_} ({short})"
                     definition_item = pf.Span(
-                        pf.Str(short),
-                        identifier=f'abbr:{identifier}'
+                        pf.Str(short), identifier=f"abbr:{identifier}"
                     )
 
                     definition_description = pf.Para(pf.Str(description))
-                    doc.abbr['appendix'].append((
-                        identifier,
-                        pf.DefinitionItem(
-                            [definition_item],
-                            [pf.Definition(definition_description)]
+                    doc.abbr["appendix"].append(
+                        (
+                            identifier,
+                            pf.DefinitionItem(
+                                [definition_item],
+                                [pf.Definition(definition_description)],
+                            ),
                         )
-                    ))
+                    )
 
-                    doc.abbr['rendered'].append(identifier)
+                    doc.abbr["rendered"].append(identifier)
                 else:
                     text = short
 
                 return pf.Link(
-                    pf.Str(text),
-                    url=f'#abbr:{identifier}',
-                    title=long_
+                    pf.Str(text), url=f"#abbr:{identifier}", title=long_
                 )
 
 
 @utils.make_dependent()
 def _prepare(doc):
     doc.abbr = {
-        'definitions': dict(),
-        'used': list(),
-        'rendered': list(),
-        'appendix': list(),
-        'latex_preamble': dict(),
+        "definitions": dict(),
+        "used": list(),
+        "rendered": list(),
+        "appendix": list(),
+        "latex_preamble": dict(),
     }
 
 
@@ -169,34 +175,37 @@ def _finalize(doc):
 
     :param doc:
     """
-    appendix = doc.abbr['appendix']
+    appendix = doc.abbr["appendix"]
     if appendix:
         heading = pf.Header(
-            pf.Str('Abbreviations'),
-            identifier='abbreviations',
-            classes=['unnumbered']
+            pf.Str("Abbreviations"),
+            identifier="abbreviations",
+            classes=["unnumbered"],
         )
         doc.content.append(heading)
         appendix.sort(key=lambda x: x[0])
         appendix = map(lambda x: x[1], appendix)
         doc.content.append(pf.DefinitionList(*appendix))
 
-    doc.metadata['preamble'] = pf.MetaInlines(
-        *[value for key, value in doc.abbr['latex_preamble'].items()]
+    if 'preamble' in doc.metadata:
+        existing_preamble = doc.metadata["preamble"].content
+    else:
+        existing_preamble = []
+
+    doc.metadata["preamble"] = pf.MetaBlocks(
+        *existing_preamble,
+        *[value for key, value in doc.abbr["latex_preamble"].items()],
     )
 
 
 def main(doc=None):
     pf.run_filters(
-        utils.reduce_dependencies(
-            parse_abbreviations,
-            render_abbreviations,
-        ),
+        utils.reduce_dependencies(parse_abbreviations, render_abbreviations),
         finalize=_finalize.to_function(),
         prepare=_prepare.to_function(),
-        doc=doc
+        doc=doc,
     )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -10,9 +10,6 @@ import bibtexparser
 
 from panscola import utils
 
-false_strings = ('False', 'false')
-true_strings = ('True', 'true')
-
 
 def bibtexparser_customizations(record):
     record = bibtexparser.customization.author(record)
@@ -42,10 +39,9 @@ def process_headers(elem, doc):
         for key, value in elem.content.items():
             string = pf.stringify(value).strip()
 
-            if string in false_strings:
-                elem[key] = pf.MetaBool(False)
-            elif string in true_strings:
-                elem[key] = pf.MetaBool(True)
+            t_f = utils.string_to_bool(string, None)
+            if t_f is not None:
+                elem[key] = pf.MetaBool(t_f)
 
 
 @utils.make_dependent()

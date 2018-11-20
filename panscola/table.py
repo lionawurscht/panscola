@@ -8,6 +8,7 @@ if __name__ == "__main__" and __package__ is None:
 import panflute as pf
 import re
 import math
+import functools
 
 import pylatex as pl
 from bs4 import BeautifulSoup
@@ -48,6 +49,9 @@ class Table(pf.Table):
 
 
 class TableCell(pf.TableCell):
+    __slots__ = ['col_span', 'row_span', 'covered', 'rm_horizontal_margins',
+                 'vertical', 'heading', 'margin_left', '_content']
+
     def __init__(
         self,
         *args,
@@ -57,6 +61,7 @@ class TableCell(pf.TableCell):
         rm_horizontal_margins=False,
         vertical=False,
         heading=0,
+        margin_left=False,
         **kwargs
     ):
         super().__init__(*args, **kwargs)
@@ -68,6 +73,13 @@ class TableCell(pf.TableCell):
                                                       bool)
         self.vertical = utils.check_type(vertical, bool)
         self.heading = utils.check_type(heading, int)
+        self.margin_left = utils.check_type(margin_left, bool)
+
+    def __hash__(self):
+        return hash(repr(self))
+
+    def __eq__(self, other):
+        return repr(self) == repr(other)
 
 
 class TableRow(pf.TableRow):
@@ -231,7 +243,10 @@ def table_matrix_to_pf(matrix, doc):
 def list_to_elems(list_):
     for i in list_:
         if isinstance(i, str):
-            for e in pf.convert_text(i, 'rst'):
+            for e in pf.convert_text(f""".. role:: raw-latex(raw)
+   :format: latex
+
+{i}""", 'rst'):
                 yield e
         else:
             yield pf.Plain(pf.Str(str(i)))
@@ -280,11 +295,11 @@ def render_table_footer_latex(elem, doc, tex):
                 term = ''.join(pf.stringify(e) for e in definition_item.term)
 
                 definitions = [
-                    utils.panflute2output(d.content, format='latex')
+                    utils.panflute2output(d.content, format='latex', doc=doc)
                     for d in definition_item.definitions
                 ]
 
-                tn.add_item(term, ''.join(definitions))
+                tn.add_item(term, pl.NoEscape(''.join(definitions)))
 
 
 def links_to_table_notes(elem, doc):
@@ -306,6 +321,62 @@ def links_to_table_notes(elem, doc):
         )
 
 
+@functools.lru_cache()
+def render_table_cell_latex(cell, c, top_space, btm_space, widths):
+    cell = cell.walk(links_to_table_notes)
+    cell_wrapper = lc.Span()
+    content = utils.panflute2output(cell.content, format='latex')
+
+    style = ''
+    if cell.heading == 1:
+        style = '\\sffamily '
+    elif cell.heading == 2:
+        style = '\\sffamily\\small '
+
+    content = style + content
+
+    cell_width = widths[c]
+    if cell.col_span > 1:
+        cell_width = sum(widths[c:c+cell.col_span])
+
+    minipage = pl.MiniPage(
+        width='{}\\columnwidth'.format(cell_width),
+        pos='t',
+        align='left',
+        content_pos='t',
+    )
+    minipage.append(pl.Command('setstretch', arguments='0.6'))
+
+    if cell.vertical:
+        minipage.append(
+            lc.RotateBox(pl.NoEscape(content))
+        )
+    else:
+        minipage.append(
+            pl.NoEscape(content)
+        )
+
+    cell_wrapper.append(pl.Command('noindent'))
+    cell_wrapper.append(minipage)
+
+    if c == 0:
+        if top_space:
+            cell_wrapper.append(pl.Command('T'))
+        if btm_space:
+            cell_wrapper.append(pl.Command('B'))
+
+    if cell.col_span > 1:
+        margins = '@{}' if cell.rm_horizontal_margins else ''
+        multicolumn = pl.MultiColumn(
+            cell.col_span,
+            align=pl.NoEscape(f'{margins}l{margins}'),
+            data=cell_wrapper,
+        )
+        return multicolumn
+    elif not cell.covered:
+        return cell_wrapper
+
+
 def render_table_latex(elem, doc):
     tex = lc.ThreePartTable()
     table = elem.content[0]
@@ -324,7 +395,7 @@ def render_table_latex(elem, doc):
     widths = [w if w else remaining_for_each for w in table.width]
 
     # We want the table to occupy a maximum width
-    widths = list(map(lambda x: x * table.total_width, widths))
+    widths = tuple(map(lambda x: x * table.total_width, widths))
 
     if hasattr(table, 'caption') and table.caption:
         caption = ''.join(pf.stringify(c) for c in table.caption)
@@ -361,58 +432,11 @@ def render_table_latex(elem, doc):
             cells = []
 
             for c, cell in enumerate(row.content):
-                cell = cell.walk(links_to_table_notes)
-                cell_wrapper = lc.Span()
-                content = utils.panflute2output(cell.content, format='latex')
-
-                style = ''
-                if cell.heading == 1:
-                    style = '\\sffamily '
-                elif cell.heading == 2:
-                    style = '\\sffamily\\small '
-
-                content = style + content
-
-                cell_width = widths[c]
-                if cell.col_span > 1:
-                    cell_width = sum(widths[c:c+cell.col_span])
-
-                minipage = pl.MiniPage(
-                    width='{}\\columnwidth'.format(cell_width),
-                    pos='b',
-                    align='right',
-                    content_pos='b',
+                tex_cell = render_table_cell_latex(
+                    cell, c, row.top_space, row.btm_space, widths,
                 )
-
-                if cell.vertical:
-                    minipage.append(
-                        lc.RotateBox(pl.NoEscape(content))
-                    )
-                else:
-                    minipage.append(
-                        pl.NoEscape(content)
-                    )
-
-                cell_wrapper.append(pl.Command('noindent'))
-                cell_wrapper.append(minipage)
-
-                if cell.col_span > 1:
-                    margins = '@{}' if cell.rm_horizontal_margins else ''
-                    multicolumn = pl.MultiColumn(
-                        cell.col_span,
-                        align=pl.NoEscape(f'{margins}l{margins}'),
-                        data=cell_wrapper,
-                    )
-                    tex_row.append(multicolumn)
-
-                elif not cell.covered:
-                    tex_row.append(cell_wrapper)
-
-                if c == 0:
-                    if row.top_space:
-                        cell_wrapper.append(pl.Command('T'))
-                    if row.btm_space:
-                        cell_wrapper.append(pl.Command('B'))
+                if tex_cell is not None:
+                    tex_row.append(tex_cell)
 
             lt.add_row(tex_row, strict=False)
 
@@ -438,7 +462,54 @@ def render_table_latex(elem, doc):
 
             rows.append(cells)
 
+    pf.debug(render_table_cell_latex.cache_info())
     return tex.dumps()
+
+
+def render_cell_odt(elem, doc):
+    pass
+
+
+class OdtTable():
+    def __init__(self, table_name, table_number, caption=None):
+        self._root = BeautifulSoup('', 'xml')
+        self._root.contents.append(Tag(name='table:table'))
+
+    def set_caption(self, caption):
+        pass
+
+
+def create_column_definitions(widths, table_name):
+    for w, width in enumerate(widths):
+        column_style_name = '{table_name}.{c}'.format(
+            table_name=table_name,
+            c=utils.number_to_uppercase(w)
+        )
+
+        column_style = utils.create_nested_tags(**{
+            'name': 'style:style',
+            'attrs': {
+                'style:name': column_style_name,
+                'style:family': 'table-column',
+            },
+            'contents': [
+                {
+                    'name': 'style:table-column-properties',
+                    'attrs': {
+                        'style:rel-column-width': '{}*'.format(
+                            math.floor(width*1000)
+                        ),
+                    },
+                },
+            ],
+        })
+
+        column_definition = utils.create_nested_tags(**{
+            'name': 'table:table-column',
+            'attrs': {'table:style-name': column_style_name},
+        })
+
+        yield column_style_name, column_style, column_definition
 
 
 def render_table_odt(elem, doc):
@@ -456,49 +527,59 @@ def render_table_odt(elem, doc):
     #
     table_root = BeautifulSoup('', 'xml')
 
-    table_odt = Tag(name='table:table')
-
-    caption_odt = Tag(name='text:p')
-    caption_odt.attrs = {
-        'text:style-name': 'Table'
-    }
-
-    caption_odt.contents.append(Tag(
-        name='text:span',
-        attrs={'text:style-name': 'Strong_20_Emphasis'},
-    ))
-
-    caption_odt.contents[0].contents.append(NavigableString('Table '))
-
-    caption_number = Tag(name='text:sequence')
-    caption_number.attrs = {
-        'text:ref-name': f'ref{table_name}',
-        'text:name': 'Table',
-        'text:formula': 'ooow:Table+1',
-        'style:num-format': '1'
-
-    }
-    caption_number.contents.append(NavigableString('.'.join(table_number)))
-    caption_odt.contents[0].contents.append(caption_number)
-
     if hasattr(table, 'caption') and table.caption:
-        caption_odt.contents[0].contents.append(NavigableString(': '))
+        colon = ': '
         caption = ''.join(pf.stringify(c) for c in table.caption)
-        caption_odt.contents.append(NavigableString(caption))
+    else:
+        colon = ''
+        caption = ''
+
+    caption_odt = utils.create_nested_tags(**{
+        'name': 'text:p',
+        'attrs': {
+            'text:style-name': 'Table'
+        },
+        'contents': [
+            {
+                'name': 'text:span',
+                'attrs': {
+                    'text:style-name': 'Strong_20_Emphasis',
+
+                },
+                'contents': [
+                    'Table ',
+                    {
+                        'name': 'text:sequence',
+                        'attrs': {
+                            'text:ref-name': f'ref{table_name}',
+                            'text:name': 'Table',
+                            'text:formula': 'ooow:Table+1',
+                            'style:num-format': '1'
+                        },
+                        'contents': [
+                            '.'.join(table_number),
+                        ],
+                    },
+                    colon,
+                ],
+            },
+            caption,
+        ],
+
+    })
 
     table_root.contents.append(caption_odt)
 
-    caption_number.contents.append(str(table_number))
-    table_odt.attrs = {
-        'table:name': table_name,
-        'table:style-name': table_name,
-        'table:template-name': 'Default Style',
-    }
+    table_odt = utils.create_nested_tags(**{
+        'name': 'table:table',
+        'attrs': {
+            'table:name': table_name,
+            'table:style-name': table_name,
+            'table:template-name': 'Default Style',
+        },
+    })
+
     table_root.contents.append(table_odt)
-    try:
-        footer = elem.content[1].content[0]
-    except IndexError:
-        footer = None
 
     unoccupied_width = 1 - sum(table.width)
     unspecified_widths = len([w for w in table.width if not w])
@@ -509,34 +590,14 @@ def render_table_odt(elem, doc):
     # We want the table to occupy a maximum width
     widths = map(lambda x: x * table.total_width, widths)
 
+    column_style_names, column_styles, column_definitions = zip(
+        *create_column_definitions(widths, table_name),
+    )
+
+    pf.debug(column_style_names, column_styles, column_definitions)
+
     styles = BeautifulSoup('', 'xml')
-
-    column_style_names = []
-    column_definitions = []
-    for w, width in enumerate(widths):
-        column_style_name = '{table_name}.{c}'.format(
-            table_name=table_name,
-            c=utils.number_to_uppercase(w)
-        )
-        column_style_names.append(column_style_name)
-
-        column_style = Tag(name='style:style')
-        column_style.attrs = {
-            'style:name': column_style_name,
-            'style:family': 'table-column',
-        }
-        column_properties = Tag(name='style:table-column-properties')
-        column_properties.attrs = {
-                'style:rel-column-width': '{}*'.format(math.floor(width*1000))
-        }
-        column_style.contents.append(column_properties)
-
-        styles.contents.append(column_style)
-
-        column_definition = Tag(name='table:table-column')
-        column_definition.attrs = {'table:style-name': column_style_name}
-
-        column_definitions.append(column_definition)
+    styles.contents = list(column_styles)
 
     table_odt.contents.extend(column_definitions)
 
@@ -608,7 +669,6 @@ def render_table_odt(elem, doc):
 
                     text_p = re.compile('text:p')
                     for t in cell_content.find_all(text_p):
-                        pf.debug(t)
                         if cell.heading == 1:
                             t['text:style-name'] = 'Table_20_Heading'
                         elif cell.heading == 2:
@@ -671,6 +731,11 @@ def render_table_odt(elem, doc):
         styles.contents.extend(row_cell_styles)
 
         table_odt.contents.append(row_odt)
+
+    try:
+        footer = elem.content[1].content[0]
+    except IndexError:
+        footer = None
 
     if footer is not None:
         for definition_item in footer.content:

@@ -17,6 +17,8 @@ from panscola import abbreviations
 from panscola import citations
 from panscola import utils
 from panscola import boxes
+from panscola import mathfilter
+from panscola import figure
 
 
 # For pretty printing dicts
@@ -25,7 +27,8 @@ pp = pprint.PrettyPrinter(indent=4)
 print_ = print
 
 
-def print(*x): pf.debug(*(pp.pformat(p) for p in x))
+def print(*x):
+    pf.debug(*(pp.pformat(p) for p in x))
 
 
 """Make toc-title a raw inline for odt"""
@@ -33,12 +36,30 @@ def print(*x): pf.debug(*(pp.pformat(p) for p in x))
 
 @utils.make_dependent()
 def repair_toc_title(elem, doc):
-    if doc.format == 'odt' and isinstance(elem, pf.MetaMap):
+    if doc.format == "odt" and isinstance(elem, pf.MetaMap):
         for key, value in elem.content.items():
             string = pf.stringify(value).strip()
-            if key == 'toc-title':
-                raw = pf.RawBlock(string, format='opendocument')
+            if key == "toc-title":
+                raw = pf.RawBlock(string, format="opendocument")
                 elem[key] = pf.MetaBlocks(raw)
+
+
+"""Add attributes of a class called 'attributed' to all its children."""
+
+
+def add_attributes(attributes):
+    def _add_attributes(elem, doc):
+        if hasattr(elem, "attributes"):
+            elem.attributes.update(attributes)
+
+    return _add_attributes
+
+
+@utils.make_dependent()
+def attributed(elem, doc):
+    if isinstance(elem, pf.Div) and "attributed" in elem.classes:
+        attributes = elem.attributes
+        elem.walk(add_attributes(attributes))
 
 
 """Comment out parts of the document
@@ -50,17 +71,24 @@ likewise with '::comment-end'
 @utils.make_dependent()
 def comment(elem, doc):
     text = pf.stringify(elem).strip()
-    is_relevant = isinstance(elem, pf.Str) and text.startswith('::comment-')
-    if is_relevant and text.endswith('-begin'):
+    is_relevant = isinstance(elem, pf.Str) and text.startswith("::comment-")
+    if is_relevant and text.endswith("-begin"):
         doc.ignore += 1
 
         # comment text wont be displayed
-        return []
+        if doc.show_comments and doc.ignore == 1:
+            return pf.Emph(pf.Str("Comment:"))
+        else:
+            return []
     if doc.ignore > 0:
-        if is_relevant and text.endswith('-end'):
+        if is_relevant and text.endswith("-end"):
             doc.ignore -= 1
             return []
-        return []
+
+        if doc.show_comments:
+            return None
+        else:
+            return []
 
 
 """Rendering my Tables"""
@@ -70,21 +98,16 @@ def check_type(input, type_):
     try:
         return type_(input)
     except TypeError:
-        raise TypeError("Couldn't convert {} of type {} to {}".format(
-            repr(input),
-            type(input).__name__,
-            type_.__name__
-        ))
+        raise TypeError(
+            "Couldn't convert {} of type {} to {}".format(
+                repr(input), type(input).__name__, type_.__name__
+            )
+        )
 
 
 class Table(pf.Table):
     def __init__(
-        self,
-        *args,
-        col_cnt=None,
-        row_cnt=None,
-        total_width=0.8,
-        **kwargs
+        self, *args, col_cnt=None, row_cnt=None, total_width=0.8, **kwargs
     ):
         super().__init__(*args, **kwargs)
 
@@ -101,7 +124,7 @@ class TableCell(pf.TableCell):
         row_span=1,
         covered=False,
         rm_horizontal_margins=False,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(*args, **kwargs)
 
@@ -112,26 +135,23 @@ class TableCell(pf.TableCell):
 
 
 class TableRow(pf.TableRow):
-    def __init__(self,
-                 *args,
-                 underlines=None,
-                 top_space=False,
-                 btm_space=False,
-                 **kwargs):
+    def __init__(
+        self, *args, underlines=None, top_space=False, btm_space=False, **kwargs
+    ):
 
         super().__init__(*args, **kwargs)
 
-        self.underlines = ([]
-                           if underlines is None
-                           else pf.utils.check_type(underlines, list))
+        self.underlines = (
+            [] if underlines is None else pf.utils.check_type(underlines, list)
+        )
         self.top_space = check_type(top_space, bool)
         self.btm_space = check_type(btm_space, bool)
 
 
 def custom_table(elem, doc):
-    if isinstance(elem, pf.Div) and 'table' in elem.classes:
-        if 'caption' in elem.attributes:
-            doc.current_caption = elem.attributes['caption']
+    if isinstance(elem, pf.Div) and "table" in elem.classes:
+        if "caption" in elem.attributes:
+            doc.current_caption = elem.attributes["caption"]
         else:
             doc.current_caption = None
 
@@ -147,20 +167,21 @@ def raw_to_custom_table(elem, doc):
 
 
 def xml_to_table_matrix(xml_input):
-    table_soup = BeautifulSoup(xml_input, 'xml')
+    table_soup = BeautifulSoup(xml_input, "xml")
 
     rows = []
-    for row in table_soup.table.find_all('row'):
+    for row in table_soup.table.find_all("row"):
         row_attributes = row.attrs
-        row_attributes['underlines'] = [
-            tuple(check_type(i, int) for i in u.strip().split('-'))
-            for u in row_attributes.get('underlines', '').split(',') if u
+        row_attributes["underlines"] = [
+            tuple(check_type(i, int) for i in u.strip().split("-"))
+            for u in row_attributes.get("underlines", "").split(",")
+            if u
         ]
 
         cells = []
-        for cell in row.find_all('cell'):
+        for cell in row.find_all("cell"):
             cell_attributes = cell.attrs
-            cell_content = ''.join(str(c) for c in cell.contents)
+            cell_content = "".join(str(c) for c in cell.contents)
 
             if cell_attributes:
                 cells.append(((cell_content,), cell_attributes))
@@ -170,13 +191,13 @@ def xml_to_table_matrix(xml_input):
         rows.append([tuple(cells), row_attributes])
 
     footnotes = []
-    for f in table_soup.table.find_all('footnotes'):
-        footnotes.append(''.join(str(c) for c in f.contents))
+    for f in table_soup.table.find_all("footnotes"):
+        footnotes.append("".join(str(c) for c in f.contents))
 
-    return([rows, '\n'.join(footnotes)])
+    return [rows, "\n".join(footnotes)]
 
 
-str_is_table_link = re.compile(r'\[\^((?:[^\s\[\]]+),?)+\]_')
+str_is_table_link = re.compile(r"\[\^((?:[^\s\[\]]+),?)+\]_")
 
 
 def table_links(elem, doc):
@@ -185,7 +206,7 @@ def table_links(elem, doc):
         if str_is_table_link.search(text):
             label = str_is_table_link.search(text).group(1)
 
-            return pf.Link(pf.Str(label), url=label, classes=['table_note'])
+            return pf.Link(pf.Str(label), url=label, classes=["table_note"])
 
 
 def table_matrix_to_pf(matrix, doc):
@@ -207,7 +228,7 @@ def table_matrix_to_pf(matrix, doc):
                 c_args = cell[0]
                 c_kwargs = cell[1]
 
-                col_span = check_type(c_kwargs.get('col_span', 1), int)
+                col_span = check_type(c_kwargs.get("col_span", 1), int)
 
                 cells.append(TableCell(*list_to_elems(c_args), **c_kwargs))
 
@@ -221,8 +242,8 @@ def table_matrix_to_pf(matrix, doc):
 
         if new_col_cnt != old_col_cnt:
             raise IndexError(
-                f'Expected {old_col_cnt} columns '
-                f'but got {new_col_cnt} in {row}'
+                f"Expected {old_col_cnt} columns "
+                f"but got {new_col_cnt} in {row}"
             )
 
         new_col_cnt = 0
@@ -231,21 +252,19 @@ def table_matrix_to_pf(matrix, doc):
 
     t_kwargs = {}
     if doc.current_caption:
-        t_kwargs['caption'] = [pf.Span(pf.Str(doc.current_caption))]
+        t_kwargs["caption"] = [pf.Span(pf.Str(doc.current_caption))]
 
-    return pf.Div(Table(
-        *rows,
-        col_cnt=old_col_cnt,
-        row_cnt=row_cnt, **t_kwargs),
+    return pf.Div(
+        Table(*rows, col_cnt=old_col_cnt, row_cnt=row_cnt, **t_kwargs),
         *footnotes,
-        classes=['custom_table'],
+        classes=["custom_table"],
     )
 
 
 def list_to_elems(list_):
     for i in list_:
         if isinstance(i, str):
-            for e in pf.convert_text(i, 'rst'):
+            for e in pf.convert_text(i, "rst"):
                 yield e
         else:
             yield pf.Plain(pf.Str(str(i)))
@@ -257,9 +276,11 @@ def list_to_elems(list_):
     citations._prepare,
     abbreviations._prepare,
     boxes._prepare,
+    mathfilter._prepare,
 )
 def _prepare(doc):
     # for the comment filter
+    doc.show_comments = doc.get_metadata("show-comments")
     doc.ignore = 0
 
 
@@ -268,7 +289,8 @@ def _prepare(doc):
     table._finalize,
     citations._finalize,
     abbreviations._finalize,
-    boxes._finalize
+    boxes._finalize,
+    mathfilter._finalize,
 )
 def _finalize(doc):
     pass
@@ -279,10 +301,13 @@ def main(doc=None):
         utils.reduce_dependencies(
             process_headers.process_headers,
             comment,
+            attributed,
             table.xml_code_to_table,
             citations.parse_citations,
             abbreviations.parse_abbreviations,
             boxes.boxes,
+            mathfilter.math,
+            figure.figure,
             citations.render_citations,
             abbreviations.render_abbreviations,
             table.render_table,
@@ -290,9 +315,9 @@ def main(doc=None):
         ),
         finalize=_finalize.to_function(),
         prepare=_prepare.to_function(),
-        doc=doc
+        doc=doc,
     )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
