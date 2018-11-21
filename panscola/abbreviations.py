@@ -7,6 +7,9 @@ if __name__ == "__main__" and __package__ is None:
 
 import string
 import regex as re
+import logging
+
+logger = logging.getLogger(__name__)
 
 import panflute as pf
 import inflect
@@ -33,6 +36,9 @@ def parse_abbreviations(elem, doc):
     if isinstance(elem, pf.Div) and "abbr" in elem.classes:
         short = elem.attributes.pop("short")
         identifier = elem.attributes.pop("name", short.lower())
+        description = elem.attributes.get("description", None)
+        if description is not None and not description.strip().startswith("{"):
+            elem.attributes["description"] = "{{{}}}".format(description)
         long_ = pf.stringify(elem).strip()
         options = ",".join(
             f"{key}={value}" for key, value in elem.attributes.items()
@@ -175,6 +181,17 @@ def _finalize(doc):
 
     :param doc:
     """
+
+    swap_string = "\n".join(
+        "  {short!r}: {identifier!r}\n  {long!r}: {identifier!r}".format(
+            identifier="+{}_".format(identifier), short=short_, long=long_
+        )
+        for identifier, (short_, long_, __) in doc.abbr["definitions"].items()
+    )
+    logger.debug(
+        "Add abbreviations to vale substitutions:\n{}\n".format(swap_string)
+    )
+
     appendix = doc.abbr["appendix"]
     if appendix:
         heading = pf.Header(
@@ -187,7 +204,7 @@ def _finalize(doc):
         appendix = map(lambda x: x[1], appendix)
         doc.content.append(pf.DefinitionList(*appendix))
 
-    if 'preamble' in doc.metadata:
+    if "preamble" in doc.metadata:
         existing_preamble = doc.metadata["preamble"].content
     else:
         existing_preamble = []

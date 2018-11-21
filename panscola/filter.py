@@ -306,8 +306,6 @@ def _finalize(doc):
 
 
 def main(doc=None):
-    logging.basicConfig(level=logging.DEBUG)
-
     pf.run_filters(
         utils.reduce_dependencies(
             process_headers.process_headers,
