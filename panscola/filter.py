@@ -7,6 +7,9 @@ if __name__ == "__main__" and __package__ is None:
 
 import regex as re
 import pprint
+import logging
+
+logger = logging.getLogger(__name__)
 
 import panflute as pf
 from bs4 import BeautifulSoup
@@ -77,18 +80,17 @@ def comment(elem, doc):
 
         # comment text wont be displayed
         if doc.show_comments and doc.ignore == 1:
+            logger.debug("Seems like show_comments is set to true?")
             return pf.Emph(pf.Str("Comment:"))
-        else:
-            return []
+
+        return []
     if doc.ignore > 0:
         if is_relevant and text.endswith("-end"):
             doc.ignore -= 1
-            return []
-
-        if doc.show_comments:
+        elif doc.show_comments:
             return None
-        else:
-            return []
+
+        return []
 
 
 """Rendering my Tables"""
@@ -280,7 +282,14 @@ def list_to_elems(list_):
 )
 def _prepare(doc):
     # for the comment filter
-    doc.show_comments = doc.get_metadata("show-comments")
+    doc.show_comments = doc.get_metadata("show-comments", False)
+
+    logger.debug(
+        "Show comments is: {}, type({})".format(
+            doc.show_comments, type(doc.show_comments)
+        )
+    )
+
     doc.ignore = 0
 
 
@@ -297,6 +306,8 @@ def _finalize(doc):
 
 
 def main(doc=None):
+    logging.basicConfig(level=logging.DEBUG)
+
     pf.run_filters(
         utils.reduce_dependencies(
             process_headers.process_headers,
