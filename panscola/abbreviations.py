@@ -24,7 +24,7 @@ is_abbreviation = re.compile(r"\+{1,2}´?(?:([^´\s_\+]+)´?)_")
 
 
 @utils.make_dependent()
-def parse_abbreviations(elem, doc):
+def parse_abbreviations_definitions(elem, doc):
     """
     Looks for divs with 'abbr' in their classes, then creates an
     abbreviation where the abbreviation is the div's attribute 'short'
@@ -59,7 +59,10 @@ def parse_abbreviations(elem, doc):
 
         return []
 
-    elif hasattr(elem, "text") and is_abbreviation.search(elem.text):
+
+@utils.make_dependent(parse_abbreviations_definitions)
+def parse_abbreviations(elem, doc):
+    if hasattr(elem, "text") and is_abbreviation.search(elem.text):
         content = []
         for s, c in utils.re_split(is_abbreviation, elem.text):
             content.append(s)
@@ -73,6 +76,16 @@ def parse_abbreviations(elem, doc):
                     specifier = ""
 
                 identifier = c.pop(0)
+
+                if (
+                    identifier not in doc.abbr["definitions"]
+                    and identifier[-1] == "s"
+                    and not pl
+                    and identifier[:-1] in doc.abbr["definitions"]
+                ):
+                    identifier = identifier[:-1]
+                    pl = "1"
+
                 uppercase = (
                     "1" if identifier[0] in string.ascii_uppercase else ""
                 )
