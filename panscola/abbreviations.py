@@ -63,8 +63,12 @@ def parse_abbreviations_definitions(elem, doc):
 @utils.make_dependent(parse_abbreviations_definitions)
 def parse_abbreviations(elem, doc):
     if hasattr(elem, "text") and is_abbreviation.search(elem.text):
+        # text = pf.stringify(elem)
+        text = elem.text
         content = []
-        for s, c in utils.re_split(is_abbreviation, elem.text):
+        logger.debug(f"Original element: {elem}")
+        for s, c in utils.re_split(is_abbreviation, text):
+            logger.debug(f"re_plit of {text} gave {s} > {c}")
             content.append(s)
             if c:
                 pl = "1" if elem.text.startswith("++") else ""
