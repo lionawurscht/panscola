@@ -224,6 +224,7 @@ def _prepare(doc):
         "rendered": list(),
         "appendix": list(),
         "latex_preamble": dict(),
+        "aliases": dict(),
     }
 
 
