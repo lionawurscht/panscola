@@ -11,22 +11,17 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-import panflute as pf
+# 3rd party
 import inflect
-
+import panflute as pf
 from panscola import utils
+import slugify
 
 
 # For plurals
 pluralize = inflect.engine()
 
 is_abbreviation = re.compile(r"\+{1,2}´?(?:([^´\s_\+]+)´?)_")
-
-
-def sluggify(name):
-    name = name.split(" ,_-")
-    name = "".join(p.lower() for p in name)
-    return name
 
 
 @utils.make_dependent()
@@ -42,14 +37,16 @@ def parse_abbreviations_definitions(elem, doc):
     if isinstance(elem, pf.Div) and "abbr" in elem.classes:
         short = elem.attributes.pop("short")
 
-        identifier = elem.attributes.pop("name", short.lower())
+        identifier = elem.attributes.pop("name", slugify.slugify(short.lower()))
 
-        aliases = set(
-            a.strip() for a in elem.attributes.pop("aliases", "").split(", ")
+        aliases = set([identifier])
+        aliases.update(
+            [
+                a.strip()
+                for a in elem.attributes.pop("aliases", "").split(", ")
+                if a
+            ]
         )
-        aliases.update(aliases)
-        aliases.update(sluggify(short))
-        aliases.add(identifier)
 
         description = elem.attributes.get("description", None)
         if description is not None and not description.strip().startswith("{"):
@@ -129,7 +126,7 @@ def parse_abbreviations(elem, doc):
                     identifier = identifier[:-1]
                     pl = "1"
 
-                identifier = doc.abbr["aliases"][identifier]
+                identifier = doc.abbr["aliases"].get(identifier, identifier)
 
                 doc.abbr["used"].append(identifier)
 
