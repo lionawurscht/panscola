@@ -23,6 +23,12 @@ pluralize = inflect.engine()
 is_abbreviation = re.compile(r"\+{1,2}´?(?:([^´\s_\+]+)´?)_")
 
 
+def sluggify(name):
+    name = name.split(" ,_-")
+    name = "".join(p.lower() for p in name)
+    return name
+
+
 @utils.make_dependent()
 def parse_abbreviations_definitions(elem, doc):
     """
@@ -35,7 +41,16 @@ def parse_abbreviations_definitions(elem, doc):
     """
     if isinstance(elem, pf.Div) and "abbr" in elem.classes:
         short = elem.attributes.pop("short")
+
         identifier = elem.attributes.pop("name", short.lower())
+
+        aliases = set(
+            a.strip() for a in elem.attributes.pop("aliases", "").split(", ")
+        )
+        aliases.update(aliases)
+        aliases.update(sluggify(short))
+        aliases.add(identifier)
+
         description = elem.attributes.get("description", None)
         if description is not None and not description.strip().startswith("{"):
             elem.attributes["description"] = "{{{}}}".format(description)
@@ -46,16 +61,33 @@ def parse_abbreviations_definitions(elem, doc):
         if options:
             options = f"[{options}]"
 
+        if identifier in doc.abbr["definitions"]:
+            old_short = doc.abbr["definitions"][identifier][0]
+            logger.warning(
+                f"Identifier {identifier!r} was already defined for "
+                f"{old_short!r} and will now we overwritten with {short!r}"
+            )
+
         doc.abbr["definitions"][identifier] = (short, long_, options)
 
-        if identifier not in doc.abbr["latex_preamble"]:
-            doc.abbr["latex_preamble"][identifier] = pf.RawBlock(
-                (
-                    f"\\newabbreviation{options}"
-                    f"{{{identifier}}}{{{short}}}{{{long_}}}\n"
-                ),
-                format="latex",
-            )
+        for alias in aliases:
+            if alias in doc.abbr["aliases"]:
+                old_identifier = doc.abbr["aliases"][alias]
+                logger.warning(
+                    f"Alias {alias!r} was already defined for "
+                    f"{old_identifier!r} and will now we overwritten with "
+                    f"{identifier!r}"
+                )
+
+            doc.abbr["aliases"][alias] = identifier
+
+        doc.abbr["latex_preamble"][identifier] = pf.RawBlock(
+            (
+                f"\\newabbreviation{options}"
+                f"{{{identifier}}}{{{short}}}{{{long_}}}\n"
+            ),
+            format="latex",
+        )
 
         return []
 
@@ -81,21 +113,24 @@ def parse_abbreviations(elem, doc):
 
                 identifier = c.pop(0)
 
-                if (
-                    identifier not in doc.abbr["definitions"]
-                    and identifier[-1] == "s"
-                    and not pl
-                    and identifier[:-1] in doc.abbr["definitions"]
-                ):
-                    identifier = identifier[:-1]
-                    pl = "1"
-
                 uppercase = (
                     "1" if identifier[0] in string.ascii_uppercase else ""
                 )
 
                 # Now we know whether it's uppercase
                 identifier = identifier.lower()
+
+                if (
+                    identifier not in doc.abbr["aliases"]
+                    and identifier[-1] == "s"
+                    and not pl
+                    and identifier[:-1] in doc.abbr["aliases"]
+                ):
+                    identifier = identifier[:-1]
+                    pl = "1"
+
+                identifier = doc.abbr["aliases"][identifier]
+
                 doc.abbr["used"].append(identifier)
 
                 attributes = {
