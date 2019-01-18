@@ -5,6 +5,7 @@ if __name__ == "__main__" and __package__ is None:
 
     path.append(dir(path[0]))
 
+import itertools as it
 import regex as re
 import pprint
 import logging
@@ -50,8 +51,43 @@ def repair_toc_title(elem, doc):
 """Add attributes of a class called 'attributed' to all its children."""
 
 
+def reverse_walk(elem, action, doc=None):
+    # Infer the document thanks to .parent magic
+    if doc is None:
+        doc = elem.doc
+
+    # First apply the action to the element
+    altered = action(elem, doc)
+
+    # Then iterate over children
+    for child in elem._children:
+        obj = getattr(elem, child)
+        if isinstance(obj, pf.Element):
+            ans = reverse_walk(obj, action, doc)
+        elif isinstance(obj, pf.ListContainer):
+            ans = (reverse_walk(item, action, doc) for item in obj)
+            # We need to convert single elements to iterables, so that they
+            # can be flattened later
+            ans = ((item,) if type(item) != list else item for item in ans)
+            # Flatten the list, by expanding any sublists
+            ans = list(it.chain.from_iterable(ans))
+        elif isinstance(obj, pf.DictContainer):
+            ans = [(k, reverse_walk(v, action, doc)) for k, v in obj.items()]
+            ans = [(k, v) for k, v in ans if v != []]
+        elif obj is None:
+            pass  # Empty table headers or captions
+        else:
+            raise TypeError(type(obj))
+        setattr(elem, child, ans)
+
+    return elem if altered is None else altered
+
+
 def add_attributes(attributes):
     def _add_attributes(elem, doc):
+        if hasattr(elem, "identifier") and "identifier" in attributes:
+            elem.identifier = attributes.pop("identifier")
+
         if hasattr(elem, "attributes"):
             elem.attributes.update(attributes)
 
@@ -62,7 +98,7 @@ def add_attributes(attributes):
 def attributed(elem, doc):
     if isinstance(elem, pf.Div) and "attributed" in elem.classes:
         attributes = elem.attributes
-        elem.walk(add_attributes(attributes))
+        reverse_walk(elem, add_attributes(attributes))
 
 
 """Comment out parts of the document
