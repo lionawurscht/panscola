@@ -20,6 +20,11 @@ def figure(elem, doc):
             wrap = utils.string_to_bool(elem.attributes.get("wrap", ""), False)
 
             wrap_width = float(elem.attributes.get("wrap-width", "0.5"))
+            lineheight = float(elem.attributes.get("lineheight", "1"))
+            svgbaselineskip = (
+                f"""
+                \\setstretch{{{lineheight:.2f}}}"""
+            )
 
             if use_input:
                 graphic = f"\\input{{{url}}}"
@@ -70,14 +75,14 @@ def figure(elem, doc):
                 wrap_width = f"{wrap_width}\\textwidth"
 
                 head = f"""\\begin{{wrapfigure}}{{{placement}}}{{{wrap_width}}}
-                {centering}{fontsize}
+                {centering}{fontsize}{svgbaselineskip}
                 """
                 tail = "\\end{wrapfigure}"
 
             else:
                 placement = elem.attributes.get("placement", "t")
                 head = f"""\\begin{{figure}}[{placement}]
-                {centering}{fontsize}
+                {centering}{fontsize}{svgbaselineskip}
                 """
                 tail = """\\end{figure}"""
 
