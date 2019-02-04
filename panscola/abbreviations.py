@@ -1,21 +1,27 @@
 #!/usr/bin/env python
+
 if __name__ == "__main__" and __package__ is None:
     from sys import path
     from os.path import dirname as dir
 
     path.append(dir(path[0]))
 
-import string
-import regex as re
+# Standard Library
 import logging
+import string
 
-logger = logging.getLogger(__name__)
-
+# Third Party
 # 3rd party
 import inflect
 import panflute as pf
-from panscola import utils
+import regex as re
 import slugify
+
+# This Module
+from panscola import utils
+
+logger = logging.getLogger(__name__)
+
 
 
 # For plurals
@@ -34,6 +40,7 @@ def parse_abbreviations_definitions(elem, doc):
     :param elem:
     :param doc:
     """
+
     if isinstance(elem, pf.Div) and "abbr" in elem.classes:
         short = elem.attributes.pop("short")
 
@@ -41,20 +48,16 @@ def parse_abbreviations_definitions(elem, doc):
 
         aliases = set([identifier])
         aliases.update(
-            [
-                a.strip()
-                for a in elem.attributes.pop("aliases", "").split(", ")
-                if a
-            ]
+            [a.strip() for a in elem.attributes.pop("aliases", "").split(", ") if a]
         )
 
         description = elem.attributes.get("description", None)
+
         if description is not None and not description.strip().startswith("{"):
             elem.attributes["description"] = "{{{}}}".format(description)
         long_ = pf.stringify(elem).strip()
-        options = ",".join(
-            f"{key}={value}" for key, value in elem.attributes.items()
-        )
+        options = ",".join(f"{key}={value}" for key, value in elem.attributes.items())
+
         if options:
             options = f"[{options}]"
 
@@ -79,10 +82,7 @@ def parse_abbreviations_definitions(elem, doc):
             doc.abbr["aliases"][alias] = identifier
 
         doc.abbr["latex_preamble"][identifier] = pf.RawBlock(
-            (
-                f"\\newabbreviation{options}"
-                f"{{{identifier}}}{{{short}}}{{{long_}}}\n"
-            ),
+            (f"\\newabbreviation{options}" f"{{{identifier}}}{{{short}}}{{{long_}}}\n"),
             format="latex",
         )
 
@@ -96,13 +96,16 @@ def parse_abbreviations(elem, doc):
         text = elem.text
         content = []
         logger.debug(f"Original element: {elem}")
+
         for s, c in utils.re_split(is_abbreviation, text):
             logger.debug(f"re_plit of {text} gave {s} > {c}")
             content.append(s)
+
             if c:
                 pl = "1" if elem.text.startswith("++") else ""
 
                 c = c.split("@")
+
                 if len(c) > 1:
                     specifier = c.pop(0)
                 else:
@@ -110,9 +113,7 @@ def parse_abbreviations(elem, doc):
 
                 identifier = c.pop(0)
 
-                uppercase = (
-                    "1" if identifier[0] in string.ascii_uppercase else ""
-                )
+                uppercase = "1" if identifier[0] in string.ascii_uppercase else ""
 
                 # Now we know whether it's uppercase
                 identifier = identifier.lower()
@@ -138,11 +139,7 @@ def parse_abbreviations(elem, doc):
                 }
 
                 content.append(
-                    pf.Link(
-                        pf.Str(identifier),
-                        classes=["abbr"],
-                        attributes=attributes,
-                    )
+                    pf.Link(pf.Str(identifier), classes=["abbr"], attributes=attributes)
                 )
 
         return pf.Span(*content)
@@ -172,7 +169,7 @@ def render_abbreviations(elem, doc):
 
                 pl = "pl" if plural else ""
                 gls = "Gls" if uppercase else "gls"
-                specifier = f"xtra{specifier}" if specifier else specifier
+                specifier = f"xtr{specifier}" if specifier else specifier
 
                 raw = pf.RawInline(
                     f"\\{gls}{specifier}{pl}{{{identifier}}}", format="latex"
@@ -183,6 +180,7 @@ def render_abbreviations(elem, doc):
                 if uppercase:
                     short = short.upper()
                     long_ = long_.title()
+
                 if plural:
                     short = pluralize.plural(short)
                     long_ = pluralize.plural(long_)
@@ -208,9 +206,7 @@ def render_abbreviations(elem, doc):
                 else:
                     text = short
 
-                return pf.Link(
-                    pf.Str(text), url=f"#abbr:{identifier}", title=long_
-                )
+                return pf.Link(pf.Str(text), url=f"#abbr:{identifier}", title=long_)
 
 
 @utils.make_dependent()
@@ -238,16 +234,13 @@ def _finalize(doc):
         )
         for identifier, (short_, long_, __) in doc.abbr["definitions"].items()
     )
-    logger.debug(
-        "Add abbreviations to vale substitutions:\n{}\n".format(swap_string)
-    )
+    logger.debug("Add abbreviations to vale substitutions:\n{}\n".format(swap_string))
 
     appendix = doc.abbr["appendix"]
+
     if appendix:
         heading = pf.Header(
-            pf.Str("Abbreviations"),
-            identifier="abbreviations",
-            classes=["unnumbered"],
+            pf.Str("Abbreviations"), identifier="abbreviations", classes=["unnumbered"]
         )
         doc.content.append(heading)
         appendix.sort(key=lambda x: x[0])
