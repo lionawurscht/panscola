@@ -1,14 +1,20 @@
 #!/usr/bin/env python
 """Utility functions that are reused throughout the project."""
-import inspect
+# Standard Library
 import copy
-import io
-import string
 import functools
-import pyparsing as pp
+import inspect
+import io
+import itertools as it
+import logging
+import string
 
+# Third Party
 import bs4
 import panflute as pf
+import pyparsing as pp
+
+logger = logging.getLogger(__name__)
 
 
 class Dependent:
@@ -45,6 +51,7 @@ class Dependent:
                      dependencies.
         :type seen: `list` | `None`
         """
+
         return resolve_dependencies(cls, resolved, seen)
 
     @classmethod
@@ -88,6 +95,7 @@ def resolve_dependencies(dependent, resolved=None, seen=None):
     :returns: a `tuple` of containing the list of resolved and seen
              :class:`Dependent` objects.
     """
+
     if resolved is None:
         resolved = []
 
@@ -145,14 +153,27 @@ def make_dependent(*dependencies):
             _dependencies = inner_dependencies
 
         # Make the wrapped class have the original functions attributed
+
         for attr in functools.WRAPPER_ASSIGNMENTS:
-            setattr(Wrapped, attr, getattr(func, attr))
+            try:
+                setattr(Wrapped, attr, getattr(func, attr))
+            except AttributeError:
+                logger.debug("Couldn't set attributes %s of %s", attr, Wrapped)
 
         doc = getattr(func, "__doc__", "")
         doc = "" if doc is None else doc
 
         signature = str(inspect.signature(func))
-        name = getattr(func, "__name__")
+
+        name_form = func
+
+        name = getattr(func, "__name__", None)
+
+        if name is None:
+            try:
+                name = func.__class__.__name__
+            except AttributeError:
+                pass
 
         doc = f"{name}{signature}\n" + doc
         setattr(Wrapped, "__doc__", doc)
@@ -170,11 +191,10 @@ def reduce_dependencies(*list_):
     :returns: A list of functions, hopefully in the order of their
               depencency.
     """
+
     return [
         i._object
-        for i in functools.reduce(
-            reduce_dependencies_helper, [None] + list(list_)
-        )[0]
+        for i in functools.reduce(reduce_dependencies_helper, [None] + list(list_))[0]
     ]
 
 
@@ -186,10 +206,12 @@ def reduce_dependencies_helper(returned_value, dependent):
     :type returned_value: `tuple` of two `list`
     :param dependent:
     """
+
     if returned_value is None:
         returned_value = ([], [])
 
     return_value = dependent.resolve_dependencies(*returned_value)
+
     return return_value
 
 
@@ -216,9 +238,7 @@ def check_type_strictly(input, type_):
         return input
     else:
         raise TypeError(
-            "Expected input to be of type {}, was {}.".format(
-                type_, type(input)
-            )
+            "Expected input to be of type {}, was {}.".format(type_, type(input))
         )
 
 
@@ -242,22 +262,16 @@ _key = pp.Word(pp.alphas) + pp.Suppress("=")
 _dict_value = _enclosed + (pp.Suppress(",") | pp.Suppress(pp.SkipTo(")")))
 
 _args = pp.Optional(pp.delimitedList(_enclosed)).setResultsName("args") + (
-    pp.Suppress(",")
-    | pp.Suppress(pp.SkipTo(_key))
-    | pp.Suppress(pp.SkipTo(")"))
+    pp.Suppress(",") | pp.Suppress(pp.SkipTo(_key)) | pp.Suppress(pp.SkipTo(")"))
 )
 
 _kwargs = pp.Optional(pp.dictOf(_key, _dict_value)).setResultsName("kwargs")
 
-_parameters = (
-    pp.Suppress("(").leaveWhitespace() + _args + _kwargs + pp.Suppress(")")
-)
+_parameters = pp.Suppress("(").leaveWhitespace() + _args + _kwargs + pp.Suppress(")")
 
 _function = (
     pp.Suppress("::")
-    + pp.Word(pp.alphas)
-    .leaveWhitespace()
-    .setResultsName("name", listAllMatches=True)
+    + pp.Word(pp.alphas).leaveWhitespace().setResultsName("name", listAllMatches=True)
     + _parameters
 )
 
@@ -277,16 +291,16 @@ def run_functions(elem, doc):
     string_ = pf.stringify(elem)
     parts = []
     returned_values = []
+
     for string_, function in parse_functions(string_):
         parts.append(string_)
+
         if function is not None:
             try:
                 load_function = functions[function[0]]
                 args = function[1]
                 kwargs = function[2]
-                new_string, return_dict = load_function(
-                    elem, doc, *args, **kwargs
-                )
+                new_string, return_dict = load_function(elem, doc, *args, **kwargs)
 
                 if return_dict is not None:
                     returned_values.append(return_dict)
@@ -302,6 +316,7 @@ def run_functions(elem, doc):
 
 def parse_functions(string):
     last_end = 0
+
     for token, start, end in _function.scanString(string):
         print(token)
         head = string[last_end:start]
@@ -320,16 +335,47 @@ def parse_functions(string):
     yield tail, None
 
 
-def count_elements(elem, doc, relevant_elems, register=None, scope=None):
-    """Count elements by type.
+def _get_type_name_checker(relevant_elems, type_name=None, **kwargs):
+    if isinstance(relevant_elems, tuple):
+        type_name = "".join(t.__name__ for t in relevant_elems)
+
+        def checker(elem):
+            return isinstance(elem, relevant_elems)
+
+    elif isinstance(relevant_elems, type):
+        type_name = relevant_elems.__name__
+
+        def checker(elem):
+            return isinstance(elem, relevant_elems)
+
+    elif isinstance(relevant_elems, str):
+        type_name = relevant_elems
+        checker = None
+    elif callable(relevant_elems):
+        type_name = type_name or relevant_elems.__name__
+        checker = relevant_elems
+    else:
+        raise TypeError(
+            f"relevant_elems should be tuple, type of tuples of a callable, got: {type(relevant_elems)}: {relevant_elems}"
+        )
+
+    return checker, type_name
+
+
+def count_elements(
+    elem, doc, relevant_elems, register=None, scope=None, type_name=None, **kwargs
+):
+    """Count elements by type. Put this in the beginning of a walk function
+    before checking any type to keep track of the current element counts.
 
     :param elem: The element that, if it is of any of the types in
                  :py:attr:`relevant_elems` will be counted.
     :type elem: :class:`panflute.base.Element`
     :param doc: The base document, used to store the current count.
     :type doc: :class:`panflute.elements.Doc`
-    :param relevant_elems: A tuple of types that will be counted.
-    :type relevant_elems: ``tuple``
+    :param relevant_elems: A tuple of types that will be counted or a function
+                           that returns true then an element should be counted
+    :type relevant_elems: ``tuple`` | callable
     :param register: If ``None`` the default register will be used for
                      counting. Otherwise counting will happen in the register
                      provided here.
@@ -337,6 +383,8 @@ def count_elements(elem, doc, relevant_elems, register=None, scope=None):
     :param scope: A tuple of this form (register, element that forms
                   the scope, levels to which will be counted)
     :type scope: ``tuple`` | ``None``
+    :param type_name: A name to give the type, used only when
+                      ``relevant_elems`` is a function.
 
     >>> count_elements(
     ...     elem,
@@ -349,30 +397,23 @@ def count_elements(elem, doc, relevant_elems, register=None, scope=None):
     Will count Table elements relative to the current level 2 Header.
     """
 
+    if register is None:
+        register = "default"
+
     if scope is not None:
-        if scope[0] is None:
-            scope = (register, scope[1], scope[2])
-        count_elements(elem, doc, scope[1], register=scope[0])
-        if isinstance(scope[1], tuple):
-            scope_type_name = "".join(t.__name__ for t in scope[1])
-        elif isinstance(scope[1], type):
-            scope_type_name = scope[1].__name__
+        scope.setdefault("register", register)
 
-    if isinstance(relevant_elems, tuple):
-        type_name = "".join(t.__name__ for t in relevant_elems)
-    elif isinstance(relevant_elems, type):
-        type_name = relevant_elems.__name__
+        count_elements(elem, doc, **scope)
 
-    if isinstance(elem, relevant_elems):
+        __, scope_type_name = _get_type_name_checker(**scope)
 
-        if register is None:
-            register = "default"
+    checker, type_name = _get_type_name_checker(relevant_elems, type_name)
 
+    if checker(elem):
         try:
             count_elems = doc.count_elems[register]
         except KeyError:
-            doc.count_elems[register] = {type_name: [tuple(), 0]}
-            count_elems = doc.count_elems[register]
+            doc.count_elems[register] = count_elems = {type_name: [tuple(), 0]}
         except AttributeError:
             doc.count_elems = {register: {type_name: [tuple(), 0]}}
             count_elems = doc.count_elems[register]
@@ -386,13 +427,10 @@ def count_elements(elem, doc, relevant_elems, register=None, scope=None):
         index = 1 if not hasattr(elem, "level") else elem.level
 
         if scope is not None:
-            current_level = get_elem_count(
-                doc, scope_type_name, level=scope[2], register=scope[0]
-            )
+            current_level = get_elem_count(doc, **scope)
+
             if current_level != elem_counter[0]:
-                count_elems[type_name] = (
-                    [current_level] + [1] * (index - 1) + [0]
-                )
+                count_elems[type_name] = [current_level] + [1] * (index - 1) + [0]
 
                 elem_counter = count_elems[type_name]
 
@@ -405,7 +443,15 @@ def count_elements(elem, doc, relevant_elems, register=None, scope=None):
         del elem_counter[index + 1 :]
 
 
-def get_elem_count(doc, types, level=1, register=None):
+def make_label(doc, label):
+    doc.link_targets.add(label)
+
+    return label
+
+
+def get_elem_count(
+    doc, relevant_elems, level=1, register=None, type_name=None, **kwargs
+):
     """get_elem_count
 
     :param doc:
@@ -414,16 +460,7 @@ def get_elem_count(doc, types, level=1, register=None):
     :param register:
     """
 
-    if isinstance(types, tuple):
-        type_name = "".join(t.__name__ for t in types)
-    elif isinstance(types, str):
-        type_name = types
-    elif isinstance(types, type):
-        type_name = types.__name__
-    else:
-        raise TypeError(
-            "types should be either a touple of types a type or " "a string"
-        )
+    __, type_name = _get_type_name_checker(relevant_elems, type_name)
 
     if register is None:
         register = "default"
@@ -439,17 +476,17 @@ def get_elem_count(doc, types, level=1, register=None):
                 return (0,) * level
 
             if len(current_level) < level:
-                current_level = current_level + (1,) * (
-                    level - len(current_level)
-                )
+                current_level = current_level + (1,) * (level - len(current_level))
 
             return scope + current_level
         except KeyError:
             count_elems[type_name] = [tuple(), 0]
+
             return (0,) * level
 
     except KeyError:
         doc.count_elems[register] = {type_name: [tuple(), 0]}
+
         return (0,) * level
 
 
@@ -474,6 +511,7 @@ def create_nested_tags(**kwargs):
         del kwargs["contents"]
 
     tag = bs4.element.Tag(**kwargs)
+
     if contents is not None:
         for c in contents:
             if isinstance(c, dict):
@@ -499,9 +537,11 @@ def re_split(regex, string):
 
     yields tuples of strings, the second one being a match or None
     """
+
     if regex.search(string):
 
         split_list = regex.split(string)
+
         for n in range(0, len(split_list) // 2):
             yield (pf.Str(split_list.pop(0)), split_list.pop(0))
 
@@ -510,10 +550,12 @@ def re_split(regex, string):
 
 def format_names(names):
     first = pf.Emph(pf.Str(split_name(names[0])[0]))
+
     if len(names) == 0:
         return [first]
     elif len(names) == 1:
         second = pf.Emph(pf.Str(split_name(names[0])[0]))
+
         return [first, pf.Str("and"), second]
     elif len(names) > 1:
         return [first, pf.Str("et al.")]
@@ -522,6 +564,7 @@ def format_names(names):
 def split_name(name):
     parts = name.split(" ")
     parts = [p.strip(",. ") for p in parts]
+
     return parts
 
 
@@ -547,6 +590,7 @@ def panflute2output(elem, format="json", doc=None):
         return_value = pf.run_pandoc(
             text=ast, args=["-f", "json", "-t", format, "--wrap=none"]
         )
+
     return return_value
 
 
@@ -557,6 +601,7 @@ def uppercase_range(length):
 
 def number_to_uppercase(number):
     number_of_uppercase_letters = len(string.ascii_uppercase)
+
     return "".join(
         string.ascii_uppercase[i]
         for i in num_to_base_tuple(number, number_of_uppercase_letters)
@@ -565,17 +610,22 @@ def number_to_uppercase(number):
 
 def num_to_base_tuple(number, base):
     collect = []
+
     while True:
         collect.append(number % base)
+
         if number // base == 0:
             break
         elif number // base >= base:
             number = number // base
+
             continue
         else:
             collect.append(number // base)
+
             break
     collect.reverse()
+
     return collect
 
 
@@ -584,10 +634,7 @@ true_strings = ("True", "true", "yes", "Yes", "y", "Y")
 
 
 def string_to_bool(
-    string,
-    default=False,
-    true_strings=true_strings,
-    false_strings=false_strings,
+    string, default=False, true_strings=true_strings, false_strings=false_strings
 ):
     if string in false_strings:
         return False
@@ -602,6 +649,7 @@ numeric = "0123456789-."
 
 def string_to_float_unit(string):
     string = string.strip()
+
     for i, c in enumerate(string):
         if c not in numeric:
             break
@@ -611,8 +659,7 @@ def string_to_float_unit(string):
         number = float(string[:i])
     except ValueError:
         raise ValueError(
-            f"Could not convert: {number!r} to float. "
-            f"Original string: {string!r}"
+            f"Could not convert: {number!r} to float. " f"Original string: {string!r}"
         )
     unit = string[i:]
     unit = unit.strip()
@@ -625,6 +672,255 @@ def test():
     aber aber aber
     """
     pass
+
+
+def reverse_walk(elem, action, doc=None):
+    # Infer the document thanks to .parent magic
+
+    if doc is None:
+        doc = elem.doc
+
+    # First apply the action to the element
+    altered = action(elem, doc)
+
+    # Then iterate over children
+
+    for child in elem._children:
+        obj = getattr(elem, child)
+
+        if isinstance(obj, pf.Element):
+            ans = reverse_walk(obj, action, doc)
+        elif isinstance(obj, pf.ListContainer):
+            ans = (reverse_walk(item, action, doc) for item in obj)
+            # We need to convert single elements to iterables, so that they
+            # can be flattened later
+            ans = ((item,) if type(item) != list else item for item in ans)
+            # Flatten the list, by expanding any sublists
+            ans = list(it.chain.from_iterable(ans))
+        elif isinstance(obj, pf.DictContainer):
+            ans = [(k, reverse_walk(v, action, doc)) for k, v in obj.items()]
+            ans = [(k, v) for k, v in ans if v != []]
+        elif obj is None:
+            pass  # Empty table headers or captions
+        else:
+            raise TypeError(type(obj))
+        setattr(elem, child, ans)
+
+    return elem if altered is None else altered
+
+
+def make_inline(text):
+    if not text:
+        return text
+
+    if isinstance(text, str):
+        text = pf.convert_text(text, input_format="rst")
+
+    if not isinstance(text, (list, pf.ListContainer)):
+        text = [text]
+
+    text = [pf.Span(*cc.content) if isinstance(cc, (pf.Block)) else cc for cc in text]
+
+    return text
+
+
+def make_caption(caption_text, caption_title, subcaption=False):
+    caption_text = make_inline(caption_text)
+
+    caption_command = "subcaption" if subcaption else "caption"
+
+    caption_head = f"\\{caption_command}{{"
+
+    if caption_title:
+        caption_head = f"\\{caption_command}[{caption_title}]{{"
+
+    caption_tail = "}"
+
+    return [
+        pf.RawInline(caption_head, format="latex"),
+        *caption_text,
+        pf.RawInline(caption_tail, format="latex"),
+    ]
+
+
+def patch_elem_type(elem_type):
+    class patched(elem_type):
+        __slots__ = ["attributes"]
+
+    patched.__name__ = "{}Patched".format(elem_type.__name__)
+
+    return patched
+
+
+def new_elem_from_old(old_elem, new_elem_type):
+    kwargs = {
+        s: getattr(old_elem, s)
+        for s in old_elem.__slots__
+        if not s.startswith("_") and s not in ("rows", "cols")
+    }
+    children = getattr(old_elem, "_children", [])
+    kwargs.update({c: getattr(old_elem, f"_{c}") for c in children if c != "content"})
+    args = []
+
+    if "content" in children:
+        args = old_elem.content
+
+    return new_elem_type(*args, **kwargs)
+
+
+_PATCHED_ELEMS = {}
+
+
+def add_attributes(attributes, force_for=None):
+    force_for = force_for or tuple()
+
+    def _add_attributes(elem, doc):
+        if isinstance(elem, tuple(force_for)):
+            if isinstance(elem, pf.Table):
+                logger.debug("===== Got a table with this header: %s", elem.header)
+            new_elem_type = _PATCHED_ELEMS.setdefault(
+                type(elem), patch_elem_type(type(elem))
+            )
+            elem = new_elem_from_old(elem, new_elem_type)
+            elem.attributes = {}
+
+        if hasattr(elem, "identifier") and "identifier" in attributes:
+            elem.identifier = attributes.pop("identifier")
+
+        if hasattr(elem, "attributes"):
+            elem.attributes.update(attributes)
+
+        return elem
+
+    return _add_attributes
+
+
+def transform_attributes(attributes):
+    def _transform_attributes(elem, doc):
+        if hasattr(elem, "attributes"):
+            for attribute, (transformer, default) in attributes.items():
+                if attribute in elem.attributes:
+                    elem.attributes[attribute] = transformer(elem.attributes[attribute])
+                else:
+                    elem.attributes[attribute] = default
+
+        return elem
+
+    return _transform_attributes
+
+
+def rm_attributes(*attributes):
+    logger.debug(attributes)
+
+    def _rm_attributes(elem, doc):
+        if hasattr(elem, "attributes"):
+            for attr in attributes:
+                try:
+                    elem.attributes.pop(attr)
+                except KeyError:
+                    pass
+
+    return _rm_attributes
+
+
+class _BeforeAction:
+    def __init__(self, function, args=None, kwargs=None):
+        self.func = function
+        self.args = args or tuple()
+        self.kwargs = kwargs or {}
+
+    def partial(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+    def get_copy(self, *args, **kwargs):
+        return _BeforeAction(self.func, self.args, self.kwargs)
+
+    def do_before(self, *args, **kwargs):
+        self.gen = self.func(*self.args, *args, **self.kwargs, **kwargs)
+
+        try:
+            next(self.gen)
+        except StopIteration:
+            logger.warning(
+                "This shouldn't happen, a before_function apparently doesn't yield."
+            )
+            pass
+
+    def __call__(self, *args, **kwargs):
+        try:
+            return next(self.gen)
+        except StopIteration:
+            return
+
+
+def before_action(action):
+    new_action = _BeforeAction(action)
+
+    return new_action
+
+
+@make_dependent()
+@before_action
+def testaction(elem, doc):
+
+    yield
+
+    yield
+
+
+def walk(self, action, doc=None):
+    if doc is None:
+        doc = self.doc
+
+    if isinstance(action, _BeforeAction):
+        action = action.get_copy()
+        action.do_before(self, doc)
+
+    return self._walk(action, doc)
+
+
+pf.Element._walk = pf.Element.walk
+pf.Element.walk = walk
+
+
+def run_filters(
+    actions,
+    prepare=None,
+    finalize=None,
+    input_stream=None,
+    output_stream=None,
+    doc=None,
+    **kwargs,
+):
+
+    load_and_dump = doc is None
+
+    if load_and_dump:
+        doc = pf.load(input_stream=input_stream)
+
+    if prepare is not None:
+        prepare(doc)
+
+    for action in actions:
+        if kwargs:
+            if isinstance(action, _BeforeAction):
+                action.partial(**kwargs)
+            else:
+                action = functools.partial(action, **kwargs)
+
+        doc = doc.walk(action, doc)
+
+    if finalize is not None:
+        finalize(doc)
+
+    if load_and_dump:
+        pf.dump(doc, output_stream=output_stream)
+    else:
+        return doc
+
+
+pf.run_filters = run_filters
 
 
 def main():

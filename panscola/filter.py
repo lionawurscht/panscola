@@ -1,28 +1,26 @@
 #!/usr/bin/env python
+
 if __name__ == "__main__" and __package__ is None:
     from sys import path
     from os.path import dirname as dir
 
     path.append(dir(path[0]))
 
+# Standard Library
 import itertools as it
-import regex as re
-import pprint
 import logging
+import pprint
 
-logger = logging.getLogger(__name__)
-
+# Third Party
 import panflute as pf
+import regex as re
 from bs4 import BeautifulSoup
 
-from panscola import table
-from panscola import process_headers
-from panscola import abbreviations
-from panscola import citations
-from panscola import utils
-from panscola import boxes
-from panscola import mathfilter
-from panscola import figure
+# This Module
+from panscola import (abbreviations, boxes, citations, figure, mathfilter,
+                      process_headers, table, utils)
+
+logger = logging.getLogger(__name__)
 
 
 # For pretty printing dicts
@@ -43,6 +41,7 @@ def repair_toc_title(elem, doc):
     if doc.format == "odt" and isinstance(elem, pf.MetaMap):
         for key, value in elem.content.items():
             string = pf.stringify(value).strip()
+
             if key == "toc-title":
                 raw = pf.RawBlock(string, format="opendocument")
                 elem[key] = pf.MetaBlocks(raw)
@@ -51,54 +50,13 @@ def repair_toc_title(elem, doc):
 """Add attributes of a class called 'attributed' to all its children."""
 
 
-def reverse_walk(elem, action, doc=None):
-    # Infer the document thanks to .parent magic
-    if doc is None:
-        doc = elem.doc
-
-    # First apply the action to the element
-    altered = action(elem, doc)
-
-    # Then iterate over children
-    for child in elem._children:
-        obj = getattr(elem, child)
-        if isinstance(obj, pf.Element):
-            ans = reverse_walk(obj, action, doc)
-        elif isinstance(obj, pf.ListContainer):
-            ans = (reverse_walk(item, action, doc) for item in obj)
-            # We need to convert single elements to iterables, so that they
-            # can be flattened later
-            ans = ((item,) if type(item) != list else item for item in ans)
-            # Flatten the list, by expanding any sublists
-            ans = list(it.chain.from_iterable(ans))
-        elif isinstance(obj, pf.DictContainer):
-            ans = [(k, reverse_walk(v, action, doc)) for k, v in obj.items()]
-            ans = [(k, v) for k, v in ans if v != []]
-        elif obj is None:
-            pass  # Empty table headers or captions
-        else:
-            raise TypeError(type(obj))
-        setattr(elem, child, ans)
-
-    return elem if altered is None else altered
-
-
-def add_attributes(attributes):
-    def _add_attributes(elem, doc):
-        if hasattr(elem, "identifier") and "identifier" in attributes:
-            elem.identifier = attributes.pop("identifier")
-
-        if hasattr(elem, "attributes"):
-            elem.attributes.update(attributes)
-
-    return _add_attributes
-
-
 @utils.make_dependent()
 def attributed(elem, doc):
     if isinstance(elem, pf.Div) and "attributed" in elem.classes:
         attributes = elem.attributes
-        reverse_walk(elem, add_attributes(attributes))
+        utils.reverse_walk(
+            elem, utils.add_attributes(attributes, force_for=[pf.Math, pf.Table])
+        )
 
 
 """Comment out parts of the document
@@ -111,15 +69,19 @@ likewise with '::comment-end'
 def comment(elem, doc):
     text = pf.stringify(elem).strip()
     is_relevant = isinstance(elem, pf.Str) and text.startswith("::comment-")
+
     if is_relevant and text.endswith("-begin"):
         doc.ignore += 1
 
         # comment text wont be displayed
+
         if doc.show_comments and doc.ignore == 1:
             logger.debug("Seems like show_comments is set to true?")
+
             return pf.Emph(pf.Str("Comment:"))
 
         return []
+
     if doc.ignore > 0:
         if is_relevant and text.endswith("-end"):
             doc.ignore -= 1
@@ -144,9 +106,7 @@ def check_type(input, type_):
 
 
 class Table(pf.Table):
-    def __init__(
-        self, *args, col_cnt=None, row_cnt=None, total_width=0.8, **kwargs
-    ):
+    def __init__(self, *args, col_cnt=None, row_cnt=None, total_width=0.8, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.col_cnt = check_type(col_cnt, int)
@@ -201,6 +161,7 @@ def raw_to_custom_table(elem, doc):
         table_matrix = xml_to_table_matrix(elem.text)
         table_pf = table_matrix_to_pf(table_matrix, doc)
         table_pf = table_pf.walk(table_links)
+
         return table_pf
 
 
@@ -208,6 +169,7 @@ def xml_to_table_matrix(xml_input):
     table_soup = BeautifulSoup(xml_input, "xml")
 
     rows = []
+
     for row in table_soup.table.find_all("row"):
         row_attributes = row.attrs
         row_attributes["underlines"] = [
@@ -217,6 +179,7 @@ def xml_to_table_matrix(xml_input):
         ]
 
         cells = []
+
         for cell in row.find_all("cell"):
             cell_attributes = cell.attrs
             cell_content = "".join(str(c) for c in cell.contents)
@@ -229,6 +192,7 @@ def xml_to_table_matrix(xml_input):
         rows.append([tuple(cells), row_attributes])
 
     footnotes = []
+
     for f in table_soup.table.find_all("footnotes"):
         footnotes.append("".join(str(c) for c in f.contents))
 
@@ -241,6 +205,7 @@ str_is_table_link = re.compile(r"\[\^((?:[^\s\[\]]+),?)+\]_")
 def table_links(elem, doc):
     if isinstance(elem, pf.Str):
         text = pf.stringify(elem)
+
         if str_is_table_link.search(text):
             label = str_is_table_link.search(text).group(1)
 
@@ -260,8 +225,10 @@ def table_matrix_to_pf(matrix, doc):
     for r, row in enumerate(table):
         cells = []
         r_kwargs = row[1]
+
         for c, cell in enumerate(row[0]):
             new_col_cnt += 1
+
             if isinstance(cell, tuple):
                 c_args = cell[0]
                 c_kwargs = cell[1]
@@ -275,13 +242,13 @@ def table_matrix_to_pf(matrix, doc):
                     cells.append(TableCell(pf.Null(), covered=True))
             else:
                 cells.append(TableCell(*list_to_elems([cell])))
+
         if old_col_cnt is None:
             old_col_cnt = new_col_cnt
 
         if new_col_cnt != old_col_cnt:
             raise IndexError(
-                f"Expected {old_col_cnt} columns "
-                f"but got {new_col_cnt} in {row}"
+                f"Expected {old_col_cnt} columns " f"but got {new_col_cnt} in {row}"
             )
 
         new_col_cnt = 0
@@ -289,6 +256,7 @@ def table_matrix_to_pf(matrix, doc):
         rows.append(TableRow(*cells, **r_kwargs))
 
     t_kwargs = {}
+
     if doc.current_caption:
         t_kwargs["caption"] = [pf.Span(pf.Str(doc.current_caption))]
 
@@ -308,6 +276,28 @@ def list_to_elems(list_):
             yield pf.Plain(pf.Str(str(i)))
 
 
+@utils.make_dependent()
+def render_links(elem, doc):
+    if isinstance(elem, pf.Link) and doc.format == "latex":
+        url = elem.url
+
+        if url in doc.link_targets:
+            head = "\\ref{{{url}}}"
+            tail = ""
+
+            if elem.content:
+                head = "\\hyperref[{url}]{{"
+                tail = "}"
+
+            return [
+                pf.RawInline(head.format(url=url), format="latex"),
+                *elem.content,
+                pf.RawInline(tail, format="latex"),
+            ]
+        else:
+            logger.debug(url)
+
+
 @utils.make_dependent(
     process_headers._prepare,
     table._prepare,
@@ -315,6 +305,7 @@ def list_to_elems(list_):
     abbreviations._prepare,
     boxes._prepare,
     mathfilter._prepare,
+    figure._prepare,
 )
 def _prepare(doc):
     # for the comment filter
@@ -327,6 +318,7 @@ def _prepare(doc):
     )
 
     doc.ignore = 0
+    doc.link_targets = set()
 
 
 @utils.make_dependent(
@@ -344,6 +336,7 @@ def _finalize(doc):
 def main(doc=None):
     pf.run_filters(
         utils.reduce_dependencies(
+            utils.testaction,
             process_headers.process_headers,
             comment,
             attributed,
@@ -353,9 +346,11 @@ def main(doc=None):
             boxes.boxes,
             mathfilter.math,
             figure.figure,
+            figure.render_float_rows,
             citations.render_citations,
             abbreviations.render_abbreviations,
             table.render_table,
+            render_links,
             repair_toc_title,
         ),
         finalize=_finalize.to_function(),
