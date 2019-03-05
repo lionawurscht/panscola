@@ -714,6 +714,12 @@ def make_inline(text):
         return text
 
     if isinstance(text, str):
+        text = f"""
+.. role:: latex(raw)
+   :format: latex
+
+{text}
+"""
         text = pf.convert_text(text, input_format="rst")
 
     if not isinstance(text, (list, pf.ListContainer)):
