@@ -44,7 +44,7 @@ def parse_float_rows(elem, doc):
                 utils.reverse_walk(
                     elem,
                     utils.transform_attributes(
-                        {"width": (lambda w: float(w) * rel_width, rel_width)}
+                        {"width": (lambda w: str(float(w) * rel_width), str(rel_width))}
                     ),
                 )
 
