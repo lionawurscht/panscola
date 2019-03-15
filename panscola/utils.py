@@ -7,6 +7,7 @@ import inspect
 import io
 import itertools as it
 import logging
+import reprlib
 import string
 
 # Third Party
@@ -751,7 +752,26 @@ def make_caption(caption_text, caption_title, subcaption=False):
 
 def patch_elem_type(elem_type):
     class patched(elem_type):
-        __slots__ = ["attributes"]
+        __slots__ = list(elem_type.__slots__) + ["attributes"]
+        _original_type = elem_type
+
+        @property
+        def tag(self):
+            tag = self._original_type.__name__
+            return tag
+
+        def to_json(self):
+            # We need to get rid of this, in particular if we stored other
+            # elements in here.
+            # Maybe an alternative would be to use "_attributes" instead and
+            # make "attributes" a property?
+
+            delattr(self, "attributes")
+            return super().to_json()
+
+        @reprlib.recursive_repr()
+        def __repr__(self):
+            return super().__repr__()
 
     patched.__name__ = "{}Patched".format(elem_type.__name__)
 
@@ -781,12 +801,14 @@ def add_attributes(attributes, force_for=None):
     force_for = force_for or tuple()
 
     def _add_attributes(elem, doc):
-        if isinstance(elem, tuple(force_for)):
+        if type(elem) in force_for:
             if isinstance(elem, pf.Table):
                 logger.debug("===== Got a table with this header: %s", elem.header)
+
             new_elem_type = _PATCHED_ELEMS.setdefault(
                 type(elem), patch_elem_type(type(elem))
             )
+
             elem = new_elem_from_old(elem, new_elem_type)
             elem.attributes = {}
 

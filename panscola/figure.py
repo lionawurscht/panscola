@@ -292,6 +292,7 @@ def format_row(elem, doc, is_header=False):
             first = False
 
         content, underline, multicolumn = get_cell_options(cell)
+
         from_, to = i + 1, i + multicolumn
 
         if underline:
@@ -404,6 +405,22 @@ def table_links(elem, doc):
                 return pf.Link(pf.Str(label), url=label, classes=["table_note"])
 
 
+_SPECIAL_TABLE_STRINGS = {
+    r"~~~": {"latex": pf.RawInline("\\quad", format="latex"), "else": pf.Space}
+}
+
+
+def table_special_stringexpressions(elem, doc):
+    if isinstance(elem, pf.Str):
+        text = pf.stringify(elem)
+
+        for sp_string, replacements in _SPECIAL_TABLE_STRINGS.items():
+            if re.match(sp_string, text):
+                return replacements.get(doc.format, replacements["else"])
+            elif re.match(f"\\{sp_string}", text):
+                return pf.Str(sp_string)
+
+
 def _has_header(elem):
     if elem.header is None:
         return
@@ -452,6 +469,7 @@ def format_table(elem, doc):
         head = tail = ""
 
     elem = elem.walk(table_links)
+    elem = elem.walk(table_special_stringexpressions)
 
     logger.debug(type(elem))
 
