@@ -344,6 +344,7 @@ def main(doc=None):
             citations.parse_citations,
             abbreviations.parse_abbreviations,
             boxes.boxes,
+            mathfilter.role_shortcuts,
             mathfilter.math,
             figure.figure,
             figure.render_float_rows,

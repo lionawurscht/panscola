@@ -39,6 +39,39 @@ def custom_display_math(elem, doc):
         return new_elem
 
 
+def _frac(elem, doc):
+    text = elem.text
+    numerator, denominator, *rest = text.split("/")
+
+    if rest:
+        logger.debug(
+            "Got a fraction with more than one slash, disregarding rest: %s", rest
+        )
+
+    if doc.format == "latex":
+        return pf.RawInline(f"\\Tfrac{{{numerator}}}{{{denominator}}}", format="latex")
+
+
+def _span(elem, doc):
+    text = elem.text
+
+    if doc.format == "latex":
+        return pf.RawInline(f"{{{text}}}", format="latex")
+
+
+ROLE_SHORTCUTS = {"frac": _frac, "span": _span}
+
+pf.elements.RAW_FORMATS.update(ROLE_SHORTCUTS.keys())
+
+
+@utils.make_dependent()
+def role_shortcuts(elem, doc):
+    if isinstance(elem, pf.RawInline) and elem.format in ROLE_SHORTCUTS:
+        processing_function = ROLE_SHORTCUTS[elem.format]
+
+        return processing_function(elem, doc)
+
+
 @utils.make_dependent()
 def math(elem, doc):
     attributes = getattr(elem, "attributes", {})

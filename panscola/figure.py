@@ -7,6 +7,8 @@ if __name__ == "__main__" and __package__ is None:
     path.append(dir(path[0]))
 
 # Standard Library
+import copy
+import itertools as it
 import logging
 import re
 import unicodedata
@@ -17,6 +19,8 @@ import panflute as pf
 
 # This Module
 from panscola import utils
+from panscola._latex_column_definitions import (column_specifiers_from_string,
+                                                options_from_string)
 
 logger = logging.getLogger(__name__)
 
@@ -143,13 +147,14 @@ def figure(elem, doc):
                     fontsize = fontsize[0]
                     size, unit = utils.string_to_float_unit(fontsize)
 
-                    baselineskip = size * float((lineheight or "1.2"))
+                    baselineskip = size * 1.2
                     baselineskip = f"{baselineskip}{unit}"
                 else:
                     fontsize, baselineskip = fontsize
 
                 fontsize = f"\\fontsize{{{fontsize}}}{{{baselineskip}}}\\selectfont"
-            elif lineheight:
+
+            if lineheight:
                 lineheight = float(lineheight)
                 svgbaselineskip = f"""
                     \\setstretch{{{lineheight:.2f}}}"""
@@ -171,7 +176,7 @@ def figure(elem, doc):
             )
 
             head += f"""
-            {svgbaselineskip}{fontsize}
+            \\tcfamily{svgbaselineskip}{fontsize}
             """
 
             mid = """
@@ -249,39 +254,90 @@ def gather_inline(elem):
                 yield e_
 
 
-_CELL_OPTION_STRING = re.compile(r"^(?P<underline>_)?(?P<multicolumn>>+)?$")
+_CELL_OPTION_STRING = re.compile(
+    r"^(?P<underline>(?P<underline_width>[1-9][0-9]?)?\_)?(?P<multicolumn>(?P<multicolumn_width>[1-9][0-9]?)?>)?$"
+)
 
 
 def is_option_string(string_):
     return _CELL_OPTION_STRING.match(string_.strip())
 
 
-def get_cell_options(cell):
-    content = []
-    underline = False
-    multicolumn = 1
+pf.elements.RAW_FORMATS.add("multicolumn")
 
-    for elem in cell.content:
-        match = is_option_string(pf.stringify(elem))
+
+def _get_cell_options(elem, doc):
+    if isinstance(elem, pf.RawInline) and elem.format == "multicolumn":
+        options = options_from_string(
+            elem.text,
+            ["columns", "column_specifier"],
+            columns=1,
+            column_specifier=None,
+            underline=None,
+            force_multicolumn=False,
+            aliases={"ul": "underline", "fm": "force_multicolumn", "mr": "midrule"},
+            tokens={"midrule": ("underline", "midrule")},
+        )
+        doc.cell_options["underline"] = options["underline"]
+        doc.cell_options["multicolumn"] = options["columns"]
+        doc.cell_options["force_multicolumn"] = options["force_multicolumn"]
+        doc.cell_options["align"] = options["column_specifier"]
+
+        return []
+
+    if hasattr(elem, "text"):
+        match = is_option_string(elem.text)
+
         if match:
             groups = match.groupdict()
-            multicolumn = groups.get("multicolumn", None)
-            multicolumn = 1 if multicolumn is None else len(multicolumn) + 1
-            underline = "underline" in groups
-        else:
-            content.append(elem)
+            is_multicolumn = groups.get("multicolumn", None)
 
-    return content, underline, multicolumn
+            multicolumn_width = 1
+            if is_multicolumn:
+                multicolumn_width = groups.get("multicolumn_width")
+                multicolumn_width = multicolumn_width or 2
+
+            has_underline = groups.get("underline")
+
+            underline_width = 0
+            if has_underline:
+                underline_width = groups.get("underline_width")
+                underline_width = underline_width or 1
+
+            doc.cell_options["multicolumn"] = int(multicolumn_width)
+            doc.cell_options["underline"] = int(underline_width)
+
+            return []
 
 
-def format_row(elem, doc, is_header=False):
+def get_cell_options(cell, doc):
+    doc.cell_options = {
+        "underline": None,
+        "multicolumn": 1,
+        "align": None,
+        "force_multicolumn": False,
+    }
+
+    cell.walk(_get_cell_options)
+
+    underline, multicolumn, align, force_multicolumn = doc.cell_options.values()
+
+    return underline, multicolumn, align, force_multicolumn
+
+
+def format_row(elem, doc, cols, alignment, table_attributes, is_header=False):
     cells = []
     lines = []
 
     first = True
     skip = 0
+    n_rst_cols = len(elem.content)
 
     for i, cell in enumerate(elem.content):
+        doc.table_indent = 0
+        cell.walk(find_indents)
+        cell_indent = doc.table_indent
+
         if skip > 0:
             skip -= 1
             continue
@@ -291,22 +347,60 @@ def format_row(elem, doc, is_header=False):
         else:
             first = False
 
-        content, underline, multicolumn = get_cell_options(cell)
+        # Indent cells ...
+        for __ in range(cell_indent):
+            cells.append(pf.RawInline(" & ", format="latex"))
 
-        from_, to = i + 1, i + multicolumn
+        tail = []
+        # I need a multicolumn now
+
+        _width = cols[i] - cell_indent
+
+        underline, multicolumn_, align, force_multicolumn = get_cell_options(cell, doc)
+
+        content = cell.content
+
+        multicolumn = sum(cols[i : i + multicolumn_]) - cell_indent + multicolumn_
+
+        from_ = i + sum(cols[:i]) + cell_indent + 1
 
         if underline:
-            trim = "l" if from_ != 1 else ""
-            trim += "r" if to != len(elem.content) else ""
+            if underline == "midrule":
+                lines.append(pf.RawInline("\\midrule ", format="latex"))
+            else:
+                to = (
+                    from_
+                    + sum(cols[i : i + max(multicolumn_, underline)])
+                    + max(multicolumn_, underline)
+                    - 1
+                )
 
-            lines.append(
-                pf.RawInline(f"\\cmidrule({trim}){{{from_}-{to}}}", format="latex")
-            )
+                trim = "l" if from_ != 1 else ""
+                trim += "r" if to != n_rst_cols + sum(cols) else ""
 
-        if multicolumn > 1:
-            skip = multicolumn - 1
+                lines.append(
+                    pf.RawInline(f"\\cmidrule({trim}){{{from_}-{to}}} ", format="latex")
+                )
+
+        if multicolumn > 1 or force_multicolumn:
+            skip = multicolumn - 1 - _width
+
+            align = align or alignment[from_ - 1].get_n_definition(cell_indent)
+
+            align = copy.copy(align)
+
+            if i == 0 and not table_attributes.get("leave_table_padding") == "true":
+                align.no_left_padding()
+            elif (sum(cols[:i]) + i + multicolumn + cell_indent) == (
+                n_rst_cols + sum(cols)
+            ) and not table_attributes.get("leave_table_padding") == "true":
+                align.no_right_padding()
+
+            align = align.latex
             cells.append(
-                pf.RawInline(f"\\multicolumn{{{multicolumn}}}{{c}}{{", format="latex")
+                pf.RawInline(
+                    f"\\multicolumn{{{multicolumn}}}{{{align}}}{{", format="latex"
+                )
             )
             cells.extend([c_ for c in content for c_ in gather_inline(c)])
             cells.append(pf.RawInline("}", format="latex"))
@@ -317,12 +411,7 @@ def format_row(elem, doc, is_header=False):
         cells.append(pf.RawInline(" \\\\ \n", format="latex"))
 
         if not lines and is_header:
-            lines.append(
-                pf.RawInline(
-                    "\\cmidrule{{{from_}-{to}}}".format(from_=1, to=len(elem.content)),
-                    format="latex",
-                )
-            )
+            lines.append(pf.RawInline("\\midrule ", format="latex"))
 
         cells.extend(lines)
 
@@ -356,7 +445,6 @@ def _num_label_to_symbol(label):
     match = NUM_LABEL.match(label)
 
     if not match:
-        logger.debug("Didn't find a match in %s", label)
         return label
 
     number = int(match.group("number"))
@@ -405,6 +493,11 @@ def table_links(elem, doc):
                 return pf.Link(pf.Str(label), url=label, classes=["table_note"])
 
 
+def table_emph(elem, doc):
+    if isinstance(elem, pf.Strong) and doc.format == "latex":
+        return [pf.RawInline("\\B", format="latex"), *elem.content]
+
+
 _SPECIAL_TABLE_STRINGS = {
     r"~~~": {"latex": pf.RawInline("\\quad", format="latex"), "else": pf.Space}
 }
@@ -435,7 +528,11 @@ def _has_header(elem):
 def _get_env(attributes, environment=None):
     environment = environment or "tabular"
 
-    alignment = attributes["alignment"]
+    alignment = "".join(a.latex for a in attributes["alignment"])
+
+    if not attributes.get("leave_table_padding") == "true":
+        alignment = f"@{{}}{alignment}@{{}}"
+
     if environment == "tabular":
         head = f"""\\begin{{tabular}}{{{alignment}}}"""
         tail = """\\end{tabular}"""
@@ -445,6 +542,40 @@ def _get_env(attributes, environment=None):
         tail = """\\end{tabularx}"""
 
     return head, tail
+
+
+# _table_indent = re.compile(r"~~~")
+
+
+def find_indents(elem, doc):
+    if isinstance(elem, pf.Str) and elem.text == "~~~":
+        # raise Exception("Test")
+        doc.table_indent += 1
+
+        if doc.purge_indents:
+            return []
+
+
+def get_cols(elem, doc):
+    header = []
+
+    if _has_header(elem):
+        header = [elem.header]
+
+    n_cols = len(elem.content[0].content)
+
+    cols = [0] * n_cols
+    doc.purge_indents = False
+
+    for row in it.chain(header, elem.content):
+        for i, cell in enumerate(row.content):
+            doc.table_indent = 0
+            cell.walk(find_indents)
+            cols[i] = max(doc.table_indent, cols[i])
+
+    doc.purge_indents = True
+
+    return cols
 
 
 def format_table(elem, doc):
@@ -464,19 +595,24 @@ def format_table(elem, doc):
     if isinstance(elem.next, pf.DefinitionList):
         has_table_notes = True
         table_notes_list = elem.next
-        logger.debug("Table has notes")
     else:
         head = tail = ""
 
+    cols = get_cols(elem, doc)
+
     elem = elem.walk(table_links)
-    elem = elem.walk(table_special_stringexpressions)
+    # elem = elem.walk(table_special_stringexpressions)
+    elem = elem.walk(table_emph)
 
-    logger.debug(type(elem))
-
-    cols = elem.cols
-    attributes.setdefault(
-        "alignment", "".join(_ALIGNMEN_DICT[a] for a in elem.alignment)
+    alignment = attributes.setdefault(
+        "alignment", ",".join(_ALIGNMEN_DICT[a] for a in elem.alignment)
     )
+
+    alignment = list(column_specifiers_from_string(alignment, ignore_errors=True))
+    alignment = [a.indent(cols[i]) for i, a in enumerate(alignment)]
+    alignment = [a_ for a in alignment for a_ in a]
+
+    attributes["alignment"] = alignment
 
     environment = attributes.get("environment")
     env_head, env_tail = _get_env(attributes, environment)
@@ -490,7 +626,6 @@ def format_table(elem, doc):
 
     tail += env_tail
 
-    logger.debug(elem)
     rows = []
     caption = []
 
@@ -502,14 +637,13 @@ def format_table(elem, doc):
     caption.append(pf.RawInline(f"\\label{{{table_prefix}}}", format="latex"))
 
     if _has_header(elem):
-        logger.debug("Got this header: %s", elem.header)
-        row = format_row(elem.header, doc, is_header=True)
+        row = format_row(elem.header, doc, cols, alignment, attributes, is_header=True)
 
         if row is not None:
             rows.extend(row)
 
     for row in elem.content:
-        row = format_row(row, doc)
+        row = format_row(row, doc, cols, alignment, attributes)
 
         if row is not None:
             rows.extend(row)
@@ -537,7 +671,6 @@ def format_table(elem, doc):
             label = _format_label(term)
 
             definition = pf.Span(*gather_inline(table_note.definitions))
-            logger.debug(definition)
 
             table_notes.extend(
                 [

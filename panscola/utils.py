@@ -736,18 +736,19 @@ def make_caption(caption_text, caption_title, subcaption=False):
 
     caption_command = "subcaption" if subcaption else "caption"
 
-    caption_head = f"\\{caption_command}{{"
+    caption_head = [pf.RawInline(f"\\{caption_command}{{", format="latex")]
 
     if caption_title:
-        caption_head = f"\\{caption_command}[{caption_title}]{{"
+        caption_title = make_inline(caption_title)
+        caption_head = [
+            pf.RawInline(f"\\{caption_command}[", format="latex"),
+            *caption_title,
+            pf.RawInline("]{", format="latex"),
+        ]
 
     caption_tail = "}"
 
-    return [
-        pf.RawInline(caption_head, format="latex"),
-        *caption_text,
-        pf.RawInline(caption_tail, format="latex"),
-    ]
+    return [*caption_head, *caption_text, pf.RawInline(caption_tail, format="latex")]
 
 
 def patch_elem_type(elem_type):
