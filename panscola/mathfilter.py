@@ -99,6 +99,14 @@ def math(elem, doc):
         and doc.format == "latex"
     ):
 
+        if equation_name in doc.labels:
+            logger.debug(
+                "Equation: %s is already a defined label, overwriting it now.",
+                equation_name,
+            )
+
+        doc.labels[equation_name] = equation_prefix
+
         head = """\\begin{equa}
         \\eequabox{
         """
@@ -133,7 +141,8 @@ def math(elem, doc):
 
 @utils.make_dependent()
 def _prepare(doc):
-    pass
+    if not hasattr(doc, "labels"):
+        doc.labels = dict()
 
 
 @utils.make_dependent()

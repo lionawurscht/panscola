@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 def _prepare(doc):
     doc.count_elems = defaultdict(dict)
 
+    if not hasattr("doc", "labels"):
+        doc.labels = dict()
+
 
 @utils.make_dependent()
 def parse_float_rows(elem, doc):
@@ -85,19 +88,27 @@ def figure(elem, doc):
 
     yield
 
-    doc.figure_name = figure_name = label or ".".join(
-        str(i)
-        for i in utils.get_elem_count(
-            doc,
-            "figures_and_subfloatrows" if sub_float_rows is None else "subfigures",
-            register="figures",
-        )
-    )
-    doc.figure_prefix = figure_prefix = utils.make_label(
-        doc, "fig:{}".format(figure_name)
-    )
-
     if isinstance(elem, pf.Image):
+        doc.figure_name = figure_name = label or ".".join(
+            str(i)
+            for i in utils.get_elem_count(
+                doc,
+                "figures_and_subfloatrows" if sub_float_rows is None else "subfigures",
+                register="figures",
+            )
+        )
+        doc.figure_prefix = figure_prefix = utils.make_label(
+            doc, "fig:{}".format(figure_name)
+        )
+
+        if figure_name in doc.labels:
+            logger.debug(
+                "Figure: %s is already a defined label, overwriting it now.",
+                figure_name,
+            )
+
+        doc.labels[figure_name] = figure_prefix
+
         url = getattr(elem, "url", "")
         use_input = any(url.endswith(s) for s in (".pgf", ".pdf_tex"))
 
@@ -585,7 +596,15 @@ def format_table(elem, doc):
     doc.table_name = table_name = label or ".".join(
         str(i) for i in utils.get_elem_count(doc, pf.Table, register="table")
     )
-    doc.table_prefix = table_prefix = utils.make_label(doc, "tb:{}".format(table_name))
+    doc.table_prefix = table_prefix = utils.make_label(doc, "tab:{}".format(table_name))
+
+    if table_name in doc.labels:
+        logger.debug(
+            "Table %s is already a defined label, overwriting it now.", table_name
+        )
+
+    doc.labels[table_name] = table_prefix
+
     doc.table_note_prefix = table_note_prefix = utils.make_label(
         doc, "tn:{}".format(table_name)
     )
@@ -871,7 +890,7 @@ def main(doc=None):
     pf.run_filters(
         utils.reduce_dependencies(figure),
         # finalize=_finalize.to_function(),
-        # prepare=_prepare.to_function(),
+        prepare=_prepare.to_function(),
         doc=doc,
     )
 

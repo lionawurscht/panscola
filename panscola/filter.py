@@ -276,26 +276,49 @@ def list_to_elems(list_):
             yield pf.Plain(pf.Str(str(i)))
 
 
+def _get_ref(url, doc):
+    ref = None
+
+    if url in doc.labels:
+        ref = doc.labels[url]
+        logger.debug("Found url: %s in labels: %s", url, ref)
+    elif url in doc.link_targets:
+        ref = url
+
+    return ref
+
+
 @utils.make_dependent()
 def render_links(elem, doc):
     if isinstance(elem, pf.Link) and doc.format == "latex":
         url = elem.url
 
-        if url in doc.link_targets:
-            head = "\\ref{{{url}}}"
-            tail = ""
+        ref = _get_ref(url, doc)
 
+        head = "\\autoref{{{ref}}}"
+        tail = ""
+
+        if ref:
             if elem.content:
-                head = "\\hyperref[{url}]{{"
+                head = "\\hyperref[{ref}]{{"
                 tail = "}"
 
             return [
-                pf.RawInline(head.format(url=url), format="latex"),
+                pf.RawInline(head.format(ref=ref), format="latex"),
                 *elem.content,
                 pf.RawInline(tail, format="latex"),
             ]
-        else:
-            logger.debug(url)
+
+        alt_url = pf.stringify(elem).strip()
+        ref = _get_ref(alt_url, doc)
+
+        if ref:
+            return [
+                pf.RawInline(head.format(ref=ref), format="latex"),
+                pf.RawInline(tail, format="latex"),
+            ]
+
+        logger.debug(url)
 
 
 @utils.make_dependent(
@@ -319,6 +342,9 @@ def _prepare(doc):
 
     doc.ignore = 0
     doc.link_targets = set()
+
+    if not hasattr(doc, "labels"):
+        doc.labels = dict()
 
 
 @utils.make_dependent(
