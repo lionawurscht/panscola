@@ -913,6 +913,21 @@ pf.Element._walk = pf.Element.walk
 pf.Element.walk = walk
 
 
+def doc_format(format_):
+    def for_format(fn):
+        format__ = format_
+
+        @functools.wraps(fn)
+        def wrapped(elem, doc, *args, **kwargs):
+            if doc.format == format__:
+                return_value = fn(elem, doc, *args, **kwargs)
+                return return_value
+
+        return wrapped
+
+    return for_format
+
+
 def run_filters(
     actions,
     prepare=None,

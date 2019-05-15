@@ -7,6 +7,7 @@ if __name__ == "__main__" and __package__ is None:
     path.append(dir(path[0]))
 
 # Standard Library
+import copy
 import itertools as it
 import logging
 import pprint
@@ -22,6 +23,17 @@ from panscola import (abbreviations, boxes, citations, figure, mathfilter,
 
 logger = logging.getLogger(__name__)
 
+
+def check_group(value, group):
+    if value not in group:
+        tag = type(value).__name__
+        msg = "element {}: {} not in group {}".format(tag, value, repr(group))
+        raise TypeError(msg)
+    else:
+        return value
+
+
+pf.utils.check_group = check_group
 
 # For pretty printing dicts
 pp = pprint.PrettyPrinter(indent=4)
@@ -89,6 +101,25 @@ def comment(elem, doc):
             return None
 
         return []
+
+
+hyphenation_suggestion = re.compile(r"\\\-")
+
+
+@utils.make_dependent()
+def suggest_hyphenations(elem, doc):
+    if isinstance(elem, pf.Str) and hyphenation_suggestion.search(elem.text):
+        parts = [pf.Str(part) for part in hyphenation_suggestion.split(elem.text)]
+        parts = [
+            part
+            for pair in it.zip_longest(
+                parts, [pf.RawInline("\\-", format="latex")] * (len(parts) - 1)
+            )
+            for part in pair
+            if part is not None
+        ]
+
+        return parts
 
 
 """Rendering my Tables"""
@@ -356,7 +387,17 @@ def _prepare(doc):
     mathfilter._finalize,
 )
 def _finalize(doc):
-    pass
+    # Add headings for the abstracts
+
+    if doc.format != "latex":
+        for name in ["abstract", "secondabstract"]:
+            abstract = doc.metadata.content.get(name, None)
+            abstract_name = doc.get_metadata(f"{name}name", name.capitalize())
+
+            if abstract:
+                abstract.walk(mathfilter.role_shortcuts)
+                title = pf.Header(pf.Str(abstract_name), level=4)
+                doc.metadata[name].content.list.insert(0, title)
 
 
 def main(doc=None):
@@ -365,6 +406,7 @@ def main(doc=None):
             utils.testaction,
             process_headers.process_headers,
             comment,
+            suggest_hyphenations,
             attributed,
             table.xml_code_to_table,
             citations.parse_citations,
@@ -374,6 +416,9 @@ def main(doc=None):
             mathfilter.math,
             figure.figure,
             figure.render_float_rows,
+            figure.correct_image_paths,
+            figure.clean_multicolumn,
+            figure.table_links,
             citations.render_citations,
             abbreviations.render_abbreviations,
             table.render_table,

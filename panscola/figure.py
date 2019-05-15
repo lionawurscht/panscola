@@ -10,6 +10,7 @@ if __name__ == "__main__" and __package__ is None:
 import copy
 import itertools as it
 import logging
+import pathlib
 import re
 import unicodedata
 from collections import defaultdict
@@ -36,24 +37,71 @@ def _prepare(doc):
 @utils.make_dependent()
 def parse_float_rows(elem, doc):
     if isinstance(elem, pf.Div):
-        if "floatrow" in elem.classes:
-            utils.reverse_walk(elem, utils.add_attributes({"float_row": elem}))
-        elif "subfloatrows" in elem.classes:
-            attributes = getattr(elem, "attributes", {})
+        if doc.format == "latex":
+            if "floatrow" in elem.classes:
+                utils.reverse_walk(elem, utils.add_attributes({"float_row": elem}))
+            elif "subfloatrows" in elem.classes:
+                attributes = getattr(elem, "attributes", {})
 
-            child_attributes = {"sub_float_rows": elem}
-            utils.reverse_walk(elem, utils.add_attributes(child_attributes))
+                child_attributes = {"sub_float_rows": elem}
+                utils.reverse_walk(elem, utils.add_attributes(child_attributes))
 
-            cols = attributes.get("cols")
+                cols = attributes.get("cols")
 
-            if cols is not None:
-                rel_width = 1 / float(cols)
-                utils.reverse_walk(
-                    elem,
-                    utils.transform_attributes(
-                        {"width": (lambda w: str(float(w) * rel_width), str(rel_width))}
-                    ),
+                if cols is not None:
+                    rel_width = 1 / float(cols)
+                    utils.reverse_walk(
+                        elem,
+                        utils.transform_attributes(
+                            {
+                                "width": (
+                                    lambda w: str(float(w) * rel_width),
+                                    str(rel_width),
+                                )
+                            }
+                        ),
+                    )
+        else:
+            if any(c in elem.classes for c in ["floatrow", "subfloatrows"]):
+                inner = []
+
+                for e in gather_type(elem, (pf.Image, pf.Table)):
+                    inner.append(e)
+                logger.debug(
+                    "Got inner elements %s, content was: %s", inner, elem.content
                 )
+
+                if any(isinstance(e, pf.Image) for e in inner):
+                    inner = [pf.Para(i) for i in inner]
+
+                return inner
+
+
+@utils.make_dependent()
+@utils.doc_format("odt")
+def correct_image_paths(elem, doc):
+    if isinstance(elem, pf.Image):
+        url = pathlib.Path(elem.url)
+
+        if url.suffix == ".pdf_tex":
+            url = url.with_suffix(".svg")
+
+        elem.url = str(url)
+
+        elem.attributes["width"] = "50%"
+
+    elif isinstance(elem, pf.Div) and "attributed" in elem.classes:
+        inner = []
+
+        for e in gather_type(elem, pf.Image):
+            inner.append(e)
+        logger.debug("Got inner elements %s, content was: %s", inner, elem.content)
+
+        if any(isinstance(e, pf.Image) for e in inner):
+            inner = pf.Para(*inner)
+
+        if inner:
+            return inner
 
 
 def _is_figure_or_subfloatrow(elem):
@@ -88,7 +136,7 @@ def figure(elem, doc):
 
     yield
 
-    if isinstance(elem, pf.Image):
+    if isinstance(elem, pf.Image) and doc.format == "latex":
         doc.figure_name = figure_name = label or ".".join(
             str(i)
             for i in utils.get_elem_count(
@@ -170,7 +218,7 @@ def figure(elem, doc):
                 svgbaselineskip = f"""
                     \\setstretch{{{lineheight:.2f}}}"""
 
-            placement = elem.attributes.get("placement", "t")
+            placement = elem.attributes.get("placement", "htbp")
 
             head = (
                 ""
@@ -220,6 +268,21 @@ def figure(elem, doc):
         else:
             yield None
 
+    elif isinstance(elem, pf.Div) and "subfloatrows" in elem.classes:
+        # We already get them here and store the values so we don't have to count elements twice
+        # In render_sub_float_rows we use them again
+        figure_name = label or ".".join(
+            str(i)
+            for i in utils.get_elem_count(
+                doc,
+                "figures_and_subfloatrows" if sub_float_rows is None else "subfigures",
+                register="figures",
+            )
+        )
+        figure_prefix = utils.make_label(doc, "fig:{}".format(figure_name))
+        elem.attributes["_figure_name"] = figure_name
+        elem.attributes["_figure_prefix"] = figure_prefix
+
 
 def get_elem_type(elem, elem_type):
     try:
@@ -252,16 +315,33 @@ def get_elem_type(elem, elem_type):
 
 
 def gather_inline(elem):
-    if isinstance(elem, pf.Inline):
+    for e in gather_type(elem, pf.Inline):
+        yield e
+
+
+def get_children(elem):
+    for child in elem._children:
+        child = getattr(elem, child)
+        if isinstance(child, pf.ListContainer):
+            yield child
+        else:
+            for c in get_children(child):
+                yield c
+
+
+def gather_type(elem, type_):
+    if isinstance(elem, type_):
         yield elem
     else:
         if isinstance(elem, pf.ListContainer):
             content = iter(elem)
         else:
-            content = iter(elem.content)
+            children = list(get_children(elem))
+
+            content = it.chain(*(iter(child) for child in children))
 
         for e in content:
-            for e_ in gather_inline(e):
+            for e_ in gather_type(e, type_):
                 yield e_
 
 
@@ -275,6 +355,13 @@ def is_option_string(string_):
 
 
 pf.elements.RAW_FORMATS.add("multicolumn")
+
+
+@utils.make_dependent()
+@utils.doc_format("odt")
+def clean_multicolumn(elem, doc):
+    if isinstance(elem, (pf.RawInline, pf.RawBlock)) and elem.format == "multicolumn":
+        return []
 
 
 def _get_cell_options(elem, doc):
@@ -484,7 +571,18 @@ def _format_label(label):
     return label
 
 
+@utils.make_dependent()
 def table_links(elem, doc):
+    if isinstance(elem, pf.Str):
+        text = pf.stringify(elem)
+
+        match = TABLE_LINK.search(text)
+        if match:
+            if doc.format != "latex":
+                return []
+
+
+def _table_links(elem, doc):
     table_note_prefix = doc.table_note_prefix
 
     if isinstance(elem, pf.Str):
@@ -619,7 +717,7 @@ def format_table(elem, doc):
 
     cols = get_cols(elem, doc)
 
-    elem = elem.walk(table_links)
+    elem = elem.walk(_table_links)
     # elem = elem.walk(table_special_stringexpressions)
     elem = elem.walk(table_emph)
 
@@ -729,6 +827,7 @@ def format_table(elem, doc):
 
 
 @utils.make_dependent(figure)
+@utils.doc_format("latex")
 def render_sub_float_rows(elem, doc):
     attributes = getattr(elem, "attributes", {})
 
@@ -743,8 +842,23 @@ def render_sub_float_rows(elem, doc):
 
         caption_content = []
 
+        # We stored them in the figure function
+        figure_name = elem.attributes["_figure_name"]
+        figure_prefix = elem.attributes["_figure_prefix"]
+
+        if figure_name in doc.labels:
+            logger.debug(
+                "Figure: %s is already a defined label, overwriting it now.",
+                figure_name,
+            )
+
+        doc.labels[figure_name] = figure_prefix
+
         if caption:
             caption_content = utils.make_caption(caption, caption_title)
+            caption_content.append(
+                pf.RawInline(f"\\label{{{figure_prefix}}}", format="latex")
+            )
 
         # Render the content
         content = []
@@ -762,7 +876,7 @@ def render_sub_float_rows(elem, doc):
             \\end{table}
             """
         elif float_type == "figure":
-            placement = attributes.get("placement", "t")
+            placement = attributes.get("placement", "htbp")
             head = f"""\\begin{{figure}}[{placement}]
             \\ffigbox{{"""
 
@@ -806,6 +920,7 @@ def render_sub_float_rows(elem, doc):
 
 
 @utils.make_dependent(render_sub_float_rows)
+@utils.doc_format("latex")
 def render_float_rows(elem, doc):
     # If I don't check this here I will count the tables double, on the other
     # hand I need to keep track here otherwise I miss the sections and don't
@@ -867,7 +982,7 @@ def render_float_rows(elem, doc):
                     )
 
         elif float_type == "figure":
-            placement = attributes.get("placement", "t")
+            placement = attributes.get("placement", "htbp")
             head = f"""\\begin{{figure}}[{placement}]
             \\begin{{floatrow}}"""
             tail = """\\end{floatrow}

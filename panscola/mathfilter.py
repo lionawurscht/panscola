@@ -50,6 +50,8 @@ def _frac(elem, doc):
 
     if doc.format == "latex":
         return pf.RawInline(f"\\Tfrac{{{numerator}}}{{{denominator}}}", format="latex")
+    else:
+        return [pf.Str(f"{numerator}/{denominator}")]
 
 
 def _span(elem, doc):
@@ -57,9 +59,64 @@ def _span(elem, doc):
 
     if doc.format == "latex":
         return pf.RawInline(f"{{{text}}}", format="latex")
+    else:
+        return pf.Span(*elem.content)
 
 
-ROLE_SHORTCUTS = {"frac": _frac, "span": _span}
+def _multisplit(string, split_chars):
+    parts = [string]
+
+    for char in split_chars:
+        parts = [p.split(char) for p in parts]
+        # flatten the list
+        parts = [p_ for p in parts for p_ in p]
+
+    return parts
+
+
+def _mymath(elem, doc):
+    text = elem.text
+    latex, *rest = _multisplit(text, "|¬")
+
+    if doc.format == "latex":
+        return pf.Math(latex, format="InlineMath")
+    else:
+        rest = rest[0] if rest else latex
+
+        return pf.Str(rest)
+
+
+def _latexor(elem, doc):
+    text = elem.text
+    latex, *rest = _multisplit(text, "|¬")
+
+    if doc.format == "latex":
+        return pf.RawInline(latex, format="latex")
+    else:
+        rest = rest[0] if rest else latex
+
+        return pf.Str(rest)
+
+
+def _latexmath(elem, doc):
+    text = elem.text
+    latex, *rest = _multisplit(text, "|¬")
+
+    if doc.format == "latex":
+        return pf.Math(latex, format="InlineMath")
+    else:
+        rest = rest[0] if rest else latex
+
+        return pf.Str(rest)
+
+
+ROLE_SHORTCUTS = {
+    "frac": _frac,
+    "span": _span,
+    "mymath": _mymath,
+    "latexor": _latexor,
+    "latexmath": _latexmath,
+}
 
 pf.elements.RAW_FORMATS.update(ROLE_SHORTCUTS.keys())
 
@@ -107,7 +164,7 @@ def math(elem, doc):
 
         doc.labels[equation_name] = equation_prefix
 
-        head = """\\begin{equa}
+        head = """\\begin{equa}[htbp]
         \\eequabox{
         """
         tail = f"""

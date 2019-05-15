@@ -23,7 +23,6 @@ from panscola import utils
 logger = logging.getLogger(__name__)
 
 
-
 # For plurals
 pluralize = inflect.engine()
 
@@ -42,6 +41,10 @@ def parse_abbreviations_definitions(elem, doc):
     """
 
     if isinstance(elem, pf.Div) and "abbr" in elem.classes:
+        for attr in ["short", "long"]:
+            if f"{attr}_{doc.format}" in elem.attributes:
+                elem.attributes[attr] = elem.attributes.pop(f"{attr}_{doc.format}")
+
         short = elem.attributes.pop("short")
 
         identifier = elem.attributes.pop("name", slugify.slugify(short.lower()))
@@ -55,11 +58,14 @@ def parse_abbreviations_definitions(elem, doc):
 
         if description is not None and not description.strip().startswith("{"):
             elem.attributes["description"] = "{{{}}}".format(description)
-        long_ = pf.stringify(elem).strip()
-        options = ",".join(f"{key}={value}" for key, value in elem.attributes.items())
 
-        if options:
-            options = f"[{options}]"
+        long_ = elem.attributes.pop("long", None) or pf.stringify(elem).strip()
+
+        options = dict(**elem.attributes)
+        latex_options = ",".join(f"{key}={value}" for key, value in options.items())
+
+        if latex_options:
+            latex_options = f"[{latex_options}]"
 
         if identifier in doc.abbr["definitions"]:
             old_short = doc.abbr["definitions"][identifier][0]
@@ -82,7 +88,10 @@ def parse_abbreviations_definitions(elem, doc):
             doc.abbr["aliases"][alias] = identifier
 
         doc.abbr["latex_preamble"][identifier] = pf.RawBlock(
-            (f"\\newabbreviation{options}" f"{{{identifier}}}{{{short}}}{{{long_}}}\n"),
+            (
+                f"\\newabbreviation{latex_options}"
+                f"{{{identifier}}}{{{short}}}{{{long_}}}\n"
+            ),
             format="latex",
         )
 
@@ -164,7 +173,6 @@ def render_abbreviations(elem, doc):
 
             if doc.format == "latex":
                 if identifier not in doc.abbr["rendered"]:
-                    options = f"[{options}]"
                     doc.abbr["rendered"].append(identifier)
 
                 pl = "pl" if plural else ""
@@ -177,6 +185,9 @@ def render_abbreviations(elem, doc):
 
                 return raw
             else:
+
+                category = options.get("category")
+
                 if uppercase:
                     short = short.upper()
                     long_ = long_.title()
@@ -187,24 +198,35 @@ def render_abbreviations(elem, doc):
 
                 if identifier not in doc.abbr["rendered"]:
                     text = f"{long_} ({short})"
+
+                    if category == "alwaysshort":
+                        text = short
+                    elif category == "nevershort":
+                        text = long_
+
                     definition_item = pf.Span(
                         pf.Str(short), identifier=f"abbr:{identifier}"
                     )
 
                     definition_description = pf.Para(pf.Str(description))
-                    doc.abbr["appendix"].append(
-                        (
-                            identifier,
-                            pf.DefinitionItem(
-                                [definition_item],
-                                [pf.Definition(definition_description)],
-                            ),
+
+                    if not options.get("type") == "ignored":
+                        doc.abbr["appendix"].append(
+                            (
+                                identifier,
+                                pf.DefinitionItem(
+                                    [definition_item],
+                                    [pf.Definition(definition_description)],
+                                ),
+                            )
                         )
-                    )
 
                     doc.abbr["rendered"].append(identifier)
                 else:
                     text = short
+
+                    if category == "nevershort":
+                        text = long_
 
                 return pf.Link(pf.Str(text), url=f"#abbr:{identifier}", title=long_)
 
