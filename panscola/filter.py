@@ -103,6 +103,47 @@ def comment(elem, doc):
         return []
 
 
+@utils.make_dependent()
+def comment(elem, doc):
+    text = pf.stringify(elem).strip()
+    is_relevant = isinstance(elem, pf.Str) and text.startswith("::comment-")
+
+    if is_relevant and text.endswith("-begin"):
+        doc.ignore += 1
+
+        # comment text wont be displayed
+
+        if doc.show_comments and doc.ignore == 1:
+            logger.debug("Seems like show_comments is set to true?")
+
+            return pf.Emph(pf.Str("Comment:"))
+
+        return []
+
+    if doc.ignore > 0:
+        if is_relevant and text.endswith("-end"):
+            doc.ignore -= 1
+        elif doc.show_comments:
+            return None
+
+        return []
+
+
+@utils.make_dependent()
+def alteration(elem, doc):
+    text = pf.stringify(elem).strip()
+    is_relevant = isinstance(elem, pf.Para) and text.startswith("::alteration-")
+
+    if not is_relevant:
+        return
+
+    if text.endswith("-begin"):
+        return pf.RawBlock("{\\color{alterationcolor}", format="latex")
+
+    if text.endswith("-end"):
+        return pf.RawBlock("}", format="latex")
+
+
 hyphenation_suggestion = re.compile(r"\\\-")
 
 
@@ -320,19 +361,25 @@ def _get_ref(url, doc):
 
 
 @utils.make_dependent()
+def gather_link_targets(elem, doc):
+    if isinstance(elem, pf.Header):
+        doc.labels[f"#{elem.identifier}"] = elem.identifier
+
+
+@utils.make_dependent()
 def render_links(elem, doc):
     if isinstance(elem, pf.Link) and doc.format == "latex":
         url = elem.url
 
         ref = _get_ref(url, doc)
 
-        head = "\\autoref{{{ref}}}"
+        head = "\\myref{{{ref}}}"
         tail = ""
 
         if ref:
             if elem.content:
-                head = "\\hyperref[{ref}]{{"
-                tail = "}"
+                head = "\\myref{{{ref}}}["
+                tail = "]"
 
             return [
                 pf.RawInline(head.format(ref=ref), format="latex"),
@@ -406,6 +453,7 @@ def main(doc=None):
             utils.testaction,
             process_headers.process_headers,
             comment,
+            alteration,
             suggest_hyphenations,
             attributed,
             table.xml_code_to_table,
@@ -422,6 +470,7 @@ def main(doc=None):
             citations.render_citations,
             abbreviations.render_abbreviations,
             table.render_table,
+            gather_link_targets,
             render_links,
             repair_toc_title,
         ),
